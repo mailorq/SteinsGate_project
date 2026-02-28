@@ -1,6 +1,15 @@
 <div class="max-w-[80rem] mx-auto mt-12 md:mt-24 mb-16 md:mb-32 px-3 md:px-6">
   <div class="bg-zinc-800/80 rounded-xl p-4 md:p-8">
-    <h3 class="text-2xl md:text-3xl font-bold mb-4 md:mb-6">Комментарии</h3>
+
+    <button type="button" id="comments-toggle"
+            class="w-full text-left text-xl md:text-3xl font-bold flex justify-between items-center">
+      <span>Комментарии</span>
+      <span id="comments-icon" class="text-red-500 text-lg md:text-2xl transition-transform duration-300">˅</span>
+    </button>
+
+    <div id="comments-content"
+         class="max-h-0 overflow-hidden transition-all duration-500 ease-in-out">
+    <div class="mt-4 md:mt-6">
 
     {% if user.is_authenticated %}
       <form method="POST" class="mb-6 md:mb-10">
@@ -42,7 +51,7 @@
           <p class="text-zinc-300 whitespace-pre-line text-sm md:text-base leading-relaxed pl-0 md:pl-15 break-words hyphens-auto overflow-hidden">
             {{ comment.text }}
           </p>
-          
+
           {% if user.is_authenticated %}
           <div class="flex items-center gap-4 mt-3">
             <button type="button" onclick="likeComment({{ comment.id }}, true)" class="flex items-center gap-1 text-xs md:text-sm text-zinc-400 hover:text-green-400 transition">
@@ -69,6 +78,9 @@
         </div>
       {% endfor %}
     </div>
+
+    </div>{# /mt-4 #}
+    </div>{# /comments-content #}
   </div>
 
   {% if comments.has_other_pages %}
@@ -90,6 +102,30 @@
 </div>
 
 <script>
+document.addEventListener("DOMContentLoaded", function () {
+  const toggle = document.getElementById("comments-toggle");
+  const content = document.getElementById("comments-content");
+  const icon = document.getElementById("comments-icon");
+
+  // Восстановить состояние из куки
+  if (getCookie('comments_open') === '1') {
+    content.style.maxHeight = content.scrollHeight + "px";
+    icon.textContent = "˄";
+  }
+
+  toggle.addEventListener("click", function () {
+    if (content.style.maxHeight) {
+      content.style.maxHeight = null;
+      icon.textContent = "˅";
+      document.cookie = "comments_open=0; path=/; max-age=31536000";
+    } else {
+      content.style.maxHeight = content.scrollHeight + "px";
+      icon.textContent = "˄";
+      document.cookie = "comments_open=1; path=/; max-age=31536000";
+    }
+  });
+});
+
 function getCookie(name) {
     let cookieValue = null;
     if (document.cookie && document.cookie !== '') {
@@ -107,7 +143,7 @@ function getCookie(name) {
 
 function likeComment(commentId, isLike) {
     const csrftoken = getCookie('csrftoken');
-    
+
     fetch(`/comment/${commentId}/like/`, {
         method: 'POST',
         headers: {
