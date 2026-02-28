@@ -127,6 +127,12 @@ Create logs:
 mkdir logs
 ```
 
+Create file:
+
+```
+Create file "django.log" in new dir
+```
+
 Make migrations:
 
 ```
