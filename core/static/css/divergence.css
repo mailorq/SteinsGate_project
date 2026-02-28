@@ -1,0 +1,67 @@
+/* static/css/divergence.css */
+
+.nixie-container {
+    display: flex;
+    align-items: center;
+    background: oklch(21% 0.006 285.885);
+    padding: 6px;
+    width: fit-content;
+    user-select: none;
+}
+
+@media (min-width: 768px) {
+    .nixie-container {
+        padding: 10px;
+    }
+}
+
+.nixie-digit {
+    font-family: 'Courier New', monospace;
+    font-size: 1.4rem;
+    font-weight: bold;
+    color: #ff5500;
+    text-shadow:
+        0 0 3px rgba(255, 85, 0, 0.9),
+        0 0 6px rgba(255, 34, 0, 0.7);
+    width: 20px;
+    text-align: center;
+    line-height: 1.2;
+    padding: 3px 0;
+    border: 1px solid rgba(255, 85, 0, 0.2);
+    border-radius: 3px;
+    margin: 0 1px;
+    box-shadow: 0 0 5px rgba(255, 69, 0, 0.5);
+}
+
+@media (min-width: 768px) {
+    .nixie-digit {
+        font-size: 2.2rem;
+        width: 30px;
+        padding: 5px 0;
+        border-radius: 5px;
+        margin: 0 2px;
+        text-shadow:
+            0 0 4px rgba(255, 85, 0, 0.9),
+            0 0 10px rgba(255, 34, 0, 0.7);
+        box-shadow: 0 0 8px rgba(255, 69, 0, 0.5);
+    }
+}
+
+.nixie-dot {
+    font-size: 1.4rem;
+    color: #ff5500;
+    margin: 0 2px;
+    padding-bottom: 5px;
+}
+
+@media (min-width: 768px) {
+    .nixie-dot {
+        font-size: 2.2rem;
+        margin: 0 5px;
+        padding-bottom: 8px;
+    }
+}
+
+.flicker {
+    opacity: 0.3;
+}

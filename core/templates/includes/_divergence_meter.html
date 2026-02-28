@@ -1,0 +1,33 @@
+{% load static %}
+<link rel="stylesheet" href="{% static 'css/divergence.css' %}">
+
+<div id="divergence-meter" class="nixie-container">
+    <div class="nixie-digit">0</div>
+    <div class="nixie-dot">.</div>
+    <div class="nixie-digit">0</div>
+    <div class="nixie-digit">0</div>
+    <div class="nixie-digit">0</div>
+    <div class="nixie-digit">0</div>
+    <div class="nixie-digit">0</div>
+    <div class="nixie-digit">0</div>
+</div>
+
+<script src="{% static 'js/divergence.js' %}"></script>
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const meter = new DivergenceMeter('divergence-meter');
+        const path  = window.location.pathname;
+
+        const worldlineMap = [
+            { match: p => p.includes('zero'),         value: '1.129848' },
+            { match: p => p.includes('missing-link'), value: '1.130426' },
+            { match: p => p.includes('load-region'),  value: '1.130205' },
+            { match: p => p.includes('steins-gate'),  value: '0.337187' },
+        ];
+
+        const current = worldlineMap.find(w => w.match(path));
+        if (current) {
+            meter.animate(current.value, 1000);
+        }
+    });
+</script>

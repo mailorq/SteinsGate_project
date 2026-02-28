@@ -1,0 +1,122 @@
+{% load static %}
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Steins;Gate Fan Site{% endblock %}</title>
+    
+    <meta name="description" content="{% block description %}Steins;Gate фан-сайт с полными сериями аниме, комментариями и обсуждениями. Смотрите Steins;Gate, Steins;Gate 0 и другие серии онлайн.{% endblock %}">
+    <meta name="keywords" content="Steins Gate, аниме, онлайн, смотреть, Okabe, Kurisu, временные линии, научная фантастика">
+    <meta name="author" content="Future Gadget Laboratory">
+    
+    <meta property="og:title" content="{% block og_title %}Steins;Gate Fan Site{% endblock %}">
+    <meta property="og:description" content="{% block og_description %}Steins;Gate фан-сайт с полными сериями аниме, комментариями и обсуждениями{% endblock %}">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="{{ request.build_absolute_uri }}">
+    <meta property="og:image" content="{% block og_image %}{% static 'img/background.jpg' %}{% endblock %}">
+    <meta property="og:site_name" content="Steins;Gate Fan Site">
+    
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="{% block twitter_title %}Steins;Gate Fan Site{% endblock %}">
+    <meta name="twitter:description" content="{% block twitter_description %}Steins;Gate фан-сайт с полными сериями аниме{% endblock %}">
+    <meta name="twitter:image" content="{% block twitter_image %}{% static 'img/background.jpg' %}{% endblock %}">
+
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <link rel="stylesheet" href="{% static 'css/player.css' %}">
+    <link rel="stylesheet" href="{% static 'css/mobile.css' %}">
+
+    <style>
+        body {
+            background-image: url('{% static "img/background.jpg" %}');
+            background-attachment: fixed;
+            background-size: cover;
+        }
+    </style>
+
+    {% block extra_css %}{% endblock %}
+</head>
+
+<body class="bg-zinc-800 text-white">
+
+    <header class="bg-zinc-900 text-white py-3 px-4 md:py-4 md:px-9 flex justify-between items-center fixed top-0 left-0 right-0 z-50">
+
+        {% include "includes/_divergence_meter.html" %}
+
+        <li class="relative group list-none ml-2 md:ml-6">
+            <button class="flex items-center gap-1 md:gap-2 text-xs md:text-sm hover:text-orange-400 transition-colors cursor-pointer">
+                <span class="font-mono text-sm md:text-base tracking-wide md:tracking-widest uppercase">Линии</span>
+                <svg class="w-2.5 h-2.5 md:w-3 md:h-3 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                </svg>
+            </button>
+            <ul class="absolute left-0 mt-2 w-48 md:w-56 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl
+                       opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200">
+                <li>
+                    <a href="{% url 'steins_gate_page' %}" class="flex justify-between px-3 md:px-4 py-2 md:py-2.5 hover:bg-zinc-800 transition-colors">
+                        <span class="font-mono text-orange-500 text-xs md:text-sm">0.337187</span>
+                        <span class="text-zinc-400 text-xs md:text-sm">Steins;Gate</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="{% url 'steins_gate_missing_link' %}" class="flex justify-between px-3 md:px-4 py-2 md:py-2.5 hover:bg-zinc-800 transition-colors">
+                        <span class="font-mono text-orange-500 text-xs md:text-sm">1.130426</span>
+                        <span class="text-zinc-400 text-xs md:text-sm">Серия 23β</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="{% url 'steins_gate_zero_page' %}" class="flex justify-between px-3 md:px-4 py-2 md:py-2.5 hover:bg-zinc-800 transition-colors">
+                        <span class="font-mono text-orange-500 text-xs md:text-sm">1.129848</span>
+                        <span class="text-zinc-400 text-xs md:text-sm">Steins;Gate 0</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="{% url 'steins_gate_load_region' %}" class="flex justify-between px-3 md:px-4 py-2 md:py-2.5 hover:bg-zinc-800 transition-colors">
+                        <span class="font-mono text-orange-500 text-xs md:text-sm">1.130205</span>
+                        <span class="text-zinc-400 text-xs md:text-sm">Фильм</span>
+                    </a>
+                </li>
+            </ul>
+        </li>
+
+        <a href="{% url 'future_gadget_laboratory' %}" class="hidden md:block absolute left-1/2 -translate-x-1/2 text-2xl lg:text-4xl font-bold hover:text-gray-200 transition-colors cursor-pointer">
+            Future Gadget Laboratory
+        </a>
+
+        {% if user.is_authenticated %}
+            <a href="{% url 'profile' %}" class="ml-auto hover:scale-105 transition-transform">
+                <img src="{% static 'img/register_bin.png' %}" alt="Profile" class="h-12 md:h-20 w-auto hover:scale-110 transition duration-200">
+            </a>
+        {% else %}
+            <a href="{% url 'register' %}" class="ml-auto hover:scale-105 transition-transform">
+                <img src="{% static 'img/register_bin.png' %}" alt="Register" class="h-12 md:h-20 w-auto hover:scale-110 transition duration-200">
+            </a>
+        {% endif %}
+
+    </header>
+
+    <main class="pt-16 md:pt-24">
+        <div class="max-w-[84rem] mx-auto bg-zinc-900/95 px-3 md:px-6 py-4 md:py-8 min-h-screen">
+            {% block content %}{% endblock %}
+            {% block after_content %}{% endblock %}
+            {% block content_bottom %}{% endblock %}
+        </div>
+    </main>
+
+    <footer class="bg-zinc-900 text-white py-6 md:py-8 mt-8 md:mt-12">
+        <div class="max-w-[84rem] mx-auto text-center px-4">
+            <p class="text-sm md:text-lg">&copy; 2026 Steins;Gate fan site. All Rights Reserved</p>
+            <p class="mt-2 text-sm md:text-lg">El Psy Kongroo</p>
+            <p class="mt-3 md:mt-4 text-xs md:text-sm text-zinc-400">
+                Contact info: steinsgatefansite@gmail.com
+            </p>
+        </div>
+    </footer>
+
+    <script src="{% static 'js/player_switch.js' %}"></script>
+    {% block extra_js %}{% endblock %}
+
+</body>
+</html>

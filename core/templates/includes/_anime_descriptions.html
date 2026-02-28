@@ -1,0 +1,110 @@
+{% load static %}
+
+<div class="max-w-[80rem] mx-auto mb-12 md:mb-24 mt-4 px-3 md:px-6">
+
+  <div class="flex flex-col md:flex-row gap-4 md:gap-6 bg-zinc-800/80 rounded-xl p-4 md:p-6">
+
+    <div class="w-full md:w-[450px] aspect-[2/3] flex-shrink-0 rounded-lg overflow-hidden bg-zinc-700 flex items-center justify-center">
+      <img src="{% static poster %}" alt="poster" class="w-full h-full object-contain">
+    </div>
+
+    <div class="flex flex-col overflow-hidden">
+      <h2 class="text-2xl md:text-4xl font-bold mt-1">{{ anime.name }}</h2>
+      <div class="h-px w-full bg-zinc-600/60 my-3 md:my-6"></div>
+        <div class="text-sm md:text-base space-y-1">
+          <div><b>Сезон:</b> {{ anime.appearing }}</div>
+          <div><b>Тип:</b> {{ anime.type }}</div>
+          <div><b>Жанры:</b> {{ anime.genres }}</div>
+        </div>
+      <div class="h-px w-full bg-zinc-600/60 my-3 md:my-6"></div>
+      
+      <div class="flex items-center gap-4 mb-4">
+        <div class="flex items-center gap-2">
+          <span class="text-zinc-400 text-sm">Рейтинг:</span>
+          <div class="flex items-center gap-1">
+            {% if avg_rating %}
+              {% for i in "12345" %}
+                <svg class="w-5 h-5 {% if forloop.counter <= avg_rating %}text-yellow-400{% else %}text-zinc-600{% endif %}" fill="currentColor" viewBox="0 0 20 20">
+                  <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
+                </svg>
+              {% endfor %}
+              <span class="text-zinc-300 ml-2">{{ avg_rating|floatformat:1 }}</span>
+            {% else %}
+              <span class="text-zinc-500">Нет оценок</span>
+            {% endif %}
+          </div>
+        </div>
+        <div class="text-zinc-400 text-sm">
+          <span>Просмотров: <span class="text-zinc-300">{{ total_views }}</span></span>
+        </div>
+      </div>
+      
+      {% if user.is_authenticated %}
+      <div class="mb-4">
+        <span class="text-zinc-400 text-sm block mb-2">Ваша оценка:</span>
+        <div class="flex gap-1" id="rating-stars">
+          {% for i in "12345" %}
+            <button type="button" onclick="rateAnime({{ anime.id }}, {{ forloop.counter }})" class="rating-star hover:scale-110 transition">
+              <svg class="w-6 h-6 {% if user_rating and forloop.counter <= user_rating.rating %}text-yellow-400{% else %}text-zinc-600{% endif %}" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
+              </svg>
+            </button>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+      
+      <div class="h-px w-full bg-zinc-600/60 my-3 md:my-6"></div>
+      
+      <p class="text-zinc-300 text-sm md:text-lg leading-relaxed overflow-hidden line-clamp-8 md:line-clamp-10">
+        {{ anime.description }}
+      </p>
+    </div>
+
+  </div>
+</div>
+
+<script>
+function getCookie(name) {
+    let cookieValue = null;
+    if (document.cookie && document.cookie !== '') {
+        const cookies = document.cookie.split(';');
+        for (let i = 0; i < cookies.length; i++) {
+            const cookie = cookies[i].trim();
+            if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                break;
+            }
+        }
+    }
+    return cookieValue;
+}
+
+function rateAnime(animeId, rating) {
+    const csrftoken = getCookie('csrftoken');
+    
+    fetch(`/anime/${animeId}/rate/`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-CSRFToken': csrftoken
+        },
+        body: `rating=${rating}`
+    })
+    .then(response => response.json())
+    .then(data => {
+        const stars = document.querySelectorAll('#rating-stars .rating-star svg');
+        stars.forEach((star, index) => {
+            if (index < data.user_rating) {
+                star.classList.remove('text-zinc-600');
+                star.classList.add('text-yellow-400');
+            } else {
+                star.classList.remove('text-yellow-400');
+                star.classList.add('text-zinc-600');
+            }
+        });
+        location.reload();
+    })
+    .catch(error => console.error('Error:', error));
+}
+</script>

@@ -1,0 +1,116 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Email Verification{% endblock %}
+
+{% block content %}
+<div class="max-w-[30rem] mx-auto bg-zinc-800/80 rounded-xl p-8 mt-8 mb-12 shadow-lg">
+
+    <h2 class="text-3xl font-bold text-center mb-4">📩 Email Verification</h2>
+    <p class="text-zinc-400 text-center mb-6">
+        <i>A D-Mail has been sent to your inbox. Enter the 6-digit code to prove you exist in this worldline.</i>
+    </p>
+
+    {% if error %}
+        <div class="text-red-500 text-sm mb-4 text-center">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" class="flex flex-col gap-6" id="verificationForm">
+        {% csrf_token %}
+
+        <div class="w-full">
+            <label class="block mb-3 text-lg text-center" for="code">Verification Code</label>
+            <div class="flex justify-center gap-3" id="codeInputs">
+                <input type="text" maxlength="1" inputmode="numeric" pattern="[0-9]"
+                       class="w-12 h-14 text-center text-2xl font-bold bg-zinc-900/95 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-yellow-400 caret-transparent"
+                       data-index="0" autocomplete="off">
+                <input type="text" maxlength="1" inputmode="numeric" pattern="[0-9]"
+                       class="w-12 h-14 text-center text-2xl font-bold bg-zinc-900/95 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-yellow-400 caret-transparent"
+                       data-index="1" autocomplete="off">
+                <input type="text" maxlength="1" inputmode="numeric" pattern="[0-9]"
+                       class="w-12 h-14 text-center text-2xl font-bold bg-zinc-900/95 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-yellow-400 caret-transparent"
+                       data-index="2" autocomplete="off">
+                <input type="text" maxlength="1" inputmode="numeric" pattern="[0-9]"
+                       class="w-12 h-14 text-center text-2xl font-bold bg-zinc-900/95 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-yellow-400 caret-transparent"
+                       data-index="3" autocomplete="off">
+                <input type="text" maxlength="1" inputmode="numeric" pattern="[0-9]"
+                       class="w-12 h-14 text-center text-2xl font-bold bg-zinc-900/95 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-yellow-400 caret-transparent"
+                       data-index="4" autocomplete="off">
+                <input type="text" maxlength="1" inputmode="numeric" pattern="[0-9]"
+                       class="w-12 h-14 text-center text-2xl font-bold bg-zinc-900/95 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-yellow-400 caret-transparent"
+                       data-index="5" autocomplete="off">
+            </div>
+            <input type="hidden" name="code" id="codeHidden">
+        </div>
+
+        <button type="submit" id="submitBtn"
+                class="w-full bg-lime-600 text-white px-9 py-5 rounded-xl text-lg font-semibold transition duration-300 hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed"
+                disabled>
+            Verify
+        </button>
+    </form>
+
+    <div class="mt-6 text-center">
+        <a href="{% url 'register' %}" class="text-yellow-400 hover:underline text-lg">Back to Registration</a>
+    </div>
+
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const inputs = document.querySelectorAll('#codeInputs input');
+        const hidden = document.getElementById('codeHidden');
+        const submitBtn = document.getElementById('submitBtn');
+        const form = document.getElementById('verificationForm');
+
+        function updateHidden() {
+            const code = Array.from(inputs).map(i => i.value).join('');
+            hidden.value = code;
+            submitBtn.disabled = code.length !== 6 || !/^\d{6}$/.test(code);
+        }
+
+        inputs.forEach((input, idx) => {
+            // Only allow digits
+            input.addEventListener('input', (e) => {
+                const val = e.target.value.replace(/\D/g, '');
+                e.target.value = val.charAt(0) || '';
+
+                if (val && idx < inputs.length - 1) {
+                    inputs[idx + 1].focus();
+                }
+
+                updateHidden();
+            });
+
+            input.addEventListener('paste', (e) => {
+                e.preventDefault();
+                const pasted = (e.clipboardData || window.clipboardData).getData('text').replace(/\D/g, '').slice(0, 6);
+                for (let i = 0; i < inputs.length; i++) {
+                    inputs[i].value = pasted[i] || '';
+                }
+                const focusIdx = Math.min(pasted.length, inputs.length - 1);
+                inputs[focusIdx].focus();
+                updateHidden();
+            });
+
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Backspace' && !input.value && idx > 0) {
+                    inputs[idx - 1].focus();
+                    inputs[idx - 1].value = '';
+                    updateHidden();
+                }
+                // Allow Enter to submit when code is complete
+                if (e.key === 'Enter' && !submitBtn.disabled) {
+                    form.submit();
+                }
+            });
+
+            input.addEventListener('focus', () => {
+                input.select();
+            });
+        });
+
+        inputs[0].focus();
+    });
+</script>
+{% endblock %}

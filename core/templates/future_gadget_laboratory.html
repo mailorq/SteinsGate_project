@@ -1,0 +1,101 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Future Gadget Laboratory{% endblock %}
+
+{% block content %}
+
+<div class="max-w-[80rem] mx-auto mt-4 mb-10">
+  <div class="bg-zinc-800/80 rounded-xl p-8">
+
+    <p class="text-xs font-mono tracking-[0.2em] uppercase text-amber-400/70 mb-4">О проекте</p>
+
+    <h2 class="text-2xl font-semibold text-zinc-100 leading-snug mb-4">
+      Фан-платформа для просмотра Врат Штейна,<br>
+      созданная как пет-проект
+    </h2>
+
+    <div class="text-zinc-400 leading-relaxed space-y-3">
+      <p>
+        Сайт был создан в рамках пет-проекта, чтобы показать, как работает
+        настоящее веб-приложение изнутри: регистрация, подтверждение почты, загрузка файлов,
+        хранение данных.<br>
+        Тайтл выбран намеренно, как один из самых популярных и лично мной любимых. Один сериал, никакой лишней
+        сложности, весь фокус на функциональности.
+      </p>
+      <p>
+        Подробнее о функционале сайта можно посмотреть на GitHub. Здесь же я хочу рассказать о порядке просмотра и предупреждениях перед ним.
+      </p>
+      <p>
+        Начну с того, что начало аниме достаточно скучное, особенно если вы до этого не смотрели ничего подобного, так было и на моём опыте.<br>
+        Первые 11 серий содержат очень много важной и действительно интересной информации, но, вероятно, она станет таковой уже после повторного просмотра.<br>
+        Также скажу, что тайтл довольно сложный сам по себе, не получится поставить его на фон и ни разу не вдуматься в сюжет. Но, по моему субъективному мнению, это только плюс.<br>
+        Если вы выдержите «духоту» до первого и самого большого сюжетного поворота в 12-й серии, вероятно, досмотрите аниме до конца за 1-2 дня.
+      </p>
+      <p>
+        Поэтому хочу посоветовать правильный порядок просмотра, который даст максимум впечатлений без спойлеров от самого сюжета:
+      </p>
+      <ul class="space-y-1.5 pl-1 text-zinc-400">
+        <li class="flex gap-2"><span class="text-amber-400/60 font-mono shrink-0">01</span> Смотрите первые 22 серии первого сезона.</li>
+        <li class="flex gap-2"><span class="text-amber-400/60 font-mono shrink-0">02</span> Смотрите серию 23β, она является приквелом ко второму сезону «Врата Штейна 0». Этот момент действительно важен.</li>
+        <li class="flex gap-2"><span class="text-amber-400/60 font-mono shrink-0">03</span> Смотрите 1-23 серии «Врат Штейна 0». 24-я серия не несёт смысловой нагрузки относительно сюжета.</li>
+        <li class="flex gap-2"><span class="text-amber-400/60 font-mono shrink-0">04</span> Смотрите 23-24 серии первого сезона. 25-я серия является спин-оффом.</li>
+        <li class="flex gap-2"><span class="text-amber-400/60 font-mono shrink-0">05</span> Смотрите фильм «Врата Штейна: Зона загрузки дежавю», это эпилог, который кратко рассказывает о судьбе главных героев после окончания основного сюжета.</li>
+      </ul>
+      <p class="text-zinc-300">Хорошего просмотра!</p>
+    </div>
+
+    <div class="w-8 h-px bg-amber-400/30 my-6"></div>
+
+    <div class="flex flex-wrap gap-x-10 gap-y-4">
+      <div class="flex flex-col gap-0.5">
+        <span class="font-mono text-sm text-amber-400">2 сезона</span>
+        <span class="text-xs text-zinc-500">Доступно к просмотру</span>
+      </div>
+      <div class="flex flex-col gap-0.5">
+        <span class="font-mono text-sm text-amber-400">Фильм</span>
+        <span class="text-xs text-zinc-500">Доступен к просмотру</span>
+      </div>
+      <div class="flex flex-col gap-0.5">
+        <span class="font-mono text-sm text-amber-400">Серия 23β</span>
+        <span class="text-xs text-zinc-500">Доступна к просмотру</span>
+      </div>
+      <a href="https://github.com/oniqq1/anime_netflix/" target="_blank">
+        <div class="flex flex-col gap-0.5">
+          <span class="font-mono text-sm text-amber-400">GitHub</span>
+          <span class="text-xs text-zinc-500">Исходный код</span>
+        </div>
+      </a>
+      <a href="https://donatello.to/mailorq" target="_blank">
+        <div class="flex flex-col gap-0.5">
+          <span class="font-mono text-sm text-amber-400">Поддержка создателей</span>
+          <span class="text-xs text-zinc-500">Всегда большое спасибо</span>
+        </div>
+      </a>
+    </div>
+
+  </div>
+</div>
+
+{% if popular_anime %}
+<div class="max-w-[80rem] mx-auto mt-10 mb-10">
+  <div class="bg-zinc-800/80 rounded-xl p-6 md:p-8">
+    <h3 class="text-2xl font-bold mb-6 text-zinc-100">Популярные серии</h3>
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+
+      {% for anime in popular_anime %}
+      <a href="{{ anime.get_absolute_url }}" class="block bg-zinc-900 rounded-lg p-4 hover:bg-zinc-800 transition">
+        <h4 class="text-lg font-semibold text-zinc-200 mb-2">{{ anime.name }}</h4>
+        <div class="flex items-center justify-between text-sm">
+          <span class="text-zinc-400">Просмотров:</span>
+          <span class="text-amber-400 font-mono">{{ anime.views_count }}</span>
+        </div>
+      </a>
+      {% endfor %}
+
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}

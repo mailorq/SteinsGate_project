@@ -1,0 +1,54 @@
+* {
+    -webkit-tap-highlight-color: transparent;
+}
+
+body {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+@media (max-width: 767px) {
+    body {
+        background-attachment: scroll;
+    }
+
+    .player iframe,
+    .player video {
+        width: 100% !important;
+        height: auto !important;
+        aspect-ratio: 16/9;
+    }
+
+    input[type="text"],
+    input[type="email"],
+    input[type="password"],
+    textarea {
+        font-size: 16px !important;
+    }
+
+    button,
+    a {
+        min-height: 44px;
+        min-width: 44px;
+    }
+}
+
+@media (max-width: 480px) {
+    .group:hover .group-hover\:opacity-100 {
+        opacity: 0;
+        visibility: hidden;
+    }
+
+    .group:active .group-hover\:opacity-100 {
+        opacity: 100;
+        visibility: visible;
+    }
+}
+
+.comment-text {
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+    hyphens: auto;
+    -webkit-hyphens: auto;
+    -ms-hyphens: auto;
+}

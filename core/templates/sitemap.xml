@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+    <url>
+        <loc>{{ request.scheme }}://{{ request.get_host }}{% url 'future_gadget_laboratory' %}</loc>
+        <changefreq>weekly</changefreq>
+        <priority>1.0</priority>
+    </url>
+    <url>
+        <loc>{{ request.scheme }}://{{ request.get_host }}{% url 'steins_gate_page' %}</loc>
+        <changefreq>weekly</changefreq>
+        <priority>0.9</priority>
+    </url>
+    <url>
+        <loc>{{ request.scheme }}://{{ request.get_host }}{% url 'steins_gate_zero_page' %}</loc>
+        <changefreq>weekly</changefreq>
+        <priority>0.9</priority>
+    </url>
+    <url>
+        <loc>{{ request.scheme }}://{{ request.get_host }}{% url 'steins_gate_missing_link' %}</loc>
+        <changefreq>weekly</changefreq>
+        <priority>0.9</priority>
+    </url>
+    <url>
+        <loc>{{ request.scheme }}://{{ request.get_host }}{% url 'steins_gate_load_region' %}</loc>
+        <changefreq>weekly</changefreq>
+        <priority>0.9</priority>
+    </url>
+</urlset>

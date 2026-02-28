@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+Disallow: /admin/
+Disallow: /users/settings/
+Disallow: /users/change-avatar/
+Disallow: /users/change-nickname/
+
+Sitemap: {{ request.scheme }}://{{ request.get_host }}/sitemap.xml

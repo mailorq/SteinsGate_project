@@ -1,0 +1,36 @@
+{% load static %}
+
+<div class="flex justify-center items-center w-full max-w-[1280px] mx-auto">
+  {% if user.is_authenticated and watch_progress %}
+  <div class="w-full mb-2 px-3">
+    <div class="flex items-center gap-2 text-sm text-zinc-400">
+      <span>Прогресс просмотра:</span>
+      <div class="flex-1 bg-zinc-700 rounded-full h-2">
+        <div class="bg-yellow-400 h-2 rounded-full" style="width: {{ watch_progress.progress_percentage }}%"></div>
+      </div>
+      <span>{{ watch_progress.progress_percentage|floatformat:0 }}%</span>
+    </div>
+  </div>
+  {% endif %}
+  
+  <div id="player-main" class="player active w-full">
+    <div class="player-wrapper">
+      <iframe src="{{ players.player_main }}" allowfullscreen=""></iframe>
+    </div>
+  </div>
+  <div id="player-backup" class="player w-full">
+    <div class="player-wrapper">
+      <iframe src="{{ players.player_backup }}" allowfullscreen=""></iframe>
+    </div>
+  </div>
+</div>
+
+{% if user.is_authenticated %}
+<script src="{% static 'js/watch_progress.js' %}"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const savedProgress = {{ watch_progress.current_time|default:0 }};
+    initWatchProgress({{ anime.id }}, savedProgress);
+  });
+</script>
+{% endif %}

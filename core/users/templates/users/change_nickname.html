@@ -1,0 +1,41 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Change Nickname{% endblock %}
+
+{% block content %}
+<div class="max-w-[30rem] mx-auto bg-zinc-800/80 rounded-xl p-8 mt-8 mb-12 shadow-lg">
+
+    <h2 class="text-3xl font-bold text-center mb-4">Change Nickname</h2>
+    <p class="text-zinc-400 text-center mb-6">
+        <i>Every Lab Member deserves a proper codename. Choose wisely.</i>
+    </p>
+
+    {% if error %}
+        <div class="text-red-500 text-sm mb-4 text-center">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" class="flex flex-col gap-6">
+        {% csrf_token %}
+
+        <div class="w-full">
+            <label class="block mb-2 text-lg" for="nickname">New Nickname</label>
+            <input type="text" name="nickname" id="nickname"
+                   value="{{ user.profile.nickname|default:user.username }}"
+                   placeholder="Enter new nickname"
+                   maxlength="150"
+                   class="w-full bg-zinc-900/95 text-white px-5 py-4 rounded-lg focus:outline-none focus:ring-2 focus:ring-yellow-400">
+        </div>
+
+        <button type="submit"
+                class="w-full bg-lime-600 text-white px-9 py-5 rounded-xl text-lg font-semibold transition duration-300 hover:opacity-80">
+            Save Nickname
+        </button>
+    </form>
+
+    <div class="mt-6 text-center">
+        <a href="{% url 'settings' %}" class="text-yellow-400 hover:underline text-lg">Back to Settings</a>
+    </div>
+
+</div>
+{% endblock %}

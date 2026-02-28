@@ -1,0 +1,26 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Steins Gate{% endblock %}
+
+{% block content %}
+
+{% include 'includes/_anime_descriptions.html' %}
+
+{% endblock %}
+
+{% block after_content %}
+
+{% include 'includes/_switchers.html' %}
+
+{% include 'includes/_anime_players.html' %}
+
+{% endblock %}
+
+{% block content_bottom %}
+
+{% include 'includes/_animes_questions.html' %}
+
+{% include 'includes/_anime_comments.html' %}
+
+{% endblock %}

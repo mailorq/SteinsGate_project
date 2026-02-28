@@ -1,0 +1,33 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Settings{% endblock %}
+
+{% block content %}
+
+<div class="max-w-[30rem] mx-auto bg-zinc-800/80 rounded-xl p-8 mt-8 mb-12 shadow-lg">
+    <a href="{% url 'change_nickname' %}">
+        <button class="bg-blue-600 text-white w-full py-4 rounded-xl text-lg font-semibold transition hover:opacity-80 mt-2 mb-6">
+            Change name
+        </button>
+    </a>
+    <a href="{% url 'change_avatar' %}">
+        <button class="bg-blue-600 text-white w-full py-4 rounded-xl text-lg font-semibold transition hover:opacity-80 mb-10">
+            Change avatar
+        </button>
+    </a>
+    <a href="{% url 'profile' %}">
+        <button class="bg-green-500 text-white w-full py-4 rounded-xl text-lg font-semibold transition hover:opacity-80 mb-10">
+            Back to profile
+        </button>
+    </a>
+        <form method="post" action="{% url 'logout' %}">
+            {% csrf_token %}
+            <button type="submit"
+                    class="bg-red-600 text-white w-full py-4 rounded-xl text-lg font-semibold transition hover:opacity-80">
+                Logout
+            </button>
+        </form>
+</div>
+
+{% endblock %}

@@ -1,0 +1,47 @@
+<div class="max-w-[80rem] mx-auto mt-12 md:mt-24 mb-6 md:mb-10 px-3 md:px-6">
+  <div class="bg-zinc-800/80 rounded-xl p-4 md:p-8">
+
+    <button type="button" id="faq-toggle"
+            class="w-full text-left text-xl md:text-3xl font-bold flex justify-between items-center">
+      <span>F.A.Q.</span>
+      <span id="faq-icon" class="text-red-500 text-lg md:text-2xl transition-transform duration-300">˅</span>
+    </button>
+
+    <div id="faq-content"
+         class="max-h-0 overflow-hidden transition-all duration-500 ease-in-out">
+      <div class="mt-4 md:mt-8 space-y-3 md:space-y-6">
+
+        {% for item in questions %}
+        <a href="{{ item.url }}"
+           target="_blank"
+           class="block bg-zinc-900 p-3 md:p-5 rounded-xl hover:bg-zinc-800 transition text-sm md:text-base">
+          {{ item.label }}
+        </a>
+        {% endfor %}
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+
+  const toggle = document.getElementById("faq-toggle");
+  const content = document.getElementById("faq-content");
+  const icon = document.getElementById("faq-icon");
+
+  toggle.addEventListener("click", function () {
+
+    if (content.style.maxHeight) {
+      content.style.maxHeight = null;
+      icon.textContent = "˅";
+    } else {
+      content.style.maxHeight = content.scrollHeight + "px";
+      icon.textContent = "˄";
+    }
+
+  });
+
+});
+</script>

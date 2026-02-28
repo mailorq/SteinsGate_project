@@ -1,0 +1,56 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Login{% endblock %}
+
+{% block content %}
+<div class="max-w-[50rem] mx-auto bg-zinc-800/80 rounded-xl p-8 mt-8 mb-12 shadow-lg">
+
+    <h2 class="text-4xl font-bold text-center mb-6">🔓 Login</h2>
+    <h3 class="text-2xl text-center mb-3"><i>The Reading Steiner seems to be malfunctioning… remind me… what was your name again?</i></h3>
+
+    <form method="post" novalidate class="flex flex-col gap-6">
+        {% csrf_token %}
+
+        {% if form.non_field_errors %}
+            <div class="text-red-500 text-sm mb-2 text-center">
+                {{ form.non_field_errors }}
+            </div>
+        {% endif %}
+
+        <div class="w-full">
+            <label class="block mb-2 text-lg" for="{{ form.username.id_for_label }}">👤 Login</label>
+            <input type="text" name="{{ form.username.name }}" id="{{ form.username.id_for_label }}"
+                   value="{{ form.username.value|default_if_none:'' }}"
+                   placeholder="Enter login"
+                   class="w-full bg-zinc-900/95 text-white px-5 py-4 rounded-lg focus:outline-none focus:ring-2 focus:ring-yellow-400">
+            {% if form.username.errors %}
+                <div class="text-red-500 text-sm mt-1">{{ form.username.errors }}</div>
+            {% endif %}
+        </div>
+
+        <div class="w-full">
+            <label class="block mb-2 text-lg" for="{{ form.password.id_for_label }}">🔑 Password</label>
+            <input type="password" name="{{ form.password.name }}" id="{{ form.password.id_for_label }}"
+                   placeholder="Enter your password"
+                   class="w-full bg-zinc-900/95 text-white px-5 py-4 rounded-lg focus:outline-none focus:ring-2 focus:ring-yellow-400">
+            {% if form.password.errors %}
+                <div class="text-red-500 text-sm mt-1">{{ form.password.errors }}</div>
+            {% endif %}
+        </div>
+
+        <button type="submit"
+                class="w-full bg-lime-600 text-white px-9 py-5 rounded-xl text-lg font-semibold transition duration-300 hover:opacity-80">
+            Sign in
+        </button>
+    </form>
+
+    <div class="mt-8 text-center">
+        <p class="text-zinc-400 text-lg">
+            Not a lab member yet?! Then here!
+            <a href="{% url 'register' %}" class="text-yellow-400 hover:underline">Register</a>
+        </p>
+    </div>
+
+</div>
+{% endblock %}
