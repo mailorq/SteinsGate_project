@@ -9,6 +9,7 @@ ANIME_PLAYERS = {
     },
     "Steins;Gate: Load Region of Deja Vu": {
         "player_main": "https://www.anilibria.tv/public/iframe.php?id=543",
+        "player_backup": "https://kodik.info/video/20557/82311913135640b736d05a065bf8194a/720p"
     },
     "Steins;Gate: Kyoukaimenjou no Missing Link": {
         "player_main": "https://kodik.info/video/86794/6ea90a51ef578ff1a7bcabee705613fc/720p"
