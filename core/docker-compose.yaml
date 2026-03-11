@@ -1,0 +1,101 @@
+services:
+  backend:
+    # збираємо Docker image з локального 'Dockerfile'
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # ім'я контейнера (щоб його було легко знайти через 'docker ps')
+    container_name: django-backend
+    # ім'я Docker image, який буде створений
+    image: django-backend
+    # контейнер запускається не від 'root' (суперюзер), а від користувача 'django-user'
+    user: django-user
+    # прокидування порту: localhost:8000 -> контейнер:8001
+    ports:
+      - 8000:8000
+    # підключаємо локальну папку з кодом у контейнер
+    # це дозволяє змінювати код без перебудови image
+    volumes:
+      - .:/app
+      - django_static:/app/static
+      - django_media:/app/media
+    # завантажуємо змінні середовища з файлу .env
+    env_file: .env
+    # команда, яка виконується при старті контейнера
+    # спочатку застосовуються міграції, потім запускається сервер Django
+    command: >
+      sh -c "python manage.py migrate &&
+        python manage.py runserver 0.0.0.0:8000
+      "
+    # контейнер backend запускається тільки після того,
+    # як база даних стане готовою до роботи
+    depends_on:
+      db:
+        condition: service_healthy
+    # підключаємо контейнер до мережі backend
+    networks:
+      - backend
+
+  db:
+    # використовуємо готовий Docker image PostgreSQL (з docker hub)
+    image: postgres:14.6-alpine
+    # ім'я контейнера бази даних
+    container_name: postgres-database
+    # прокидання стандартного порту PostgreSQL
+    ports:
+      - 5432:5432
+    # змінні середовища для створення бази даних
+    environment:
+      POSTGRES_USER: $DB_USER
+      POSTGRES_PASSWORD: $DB_PASSWORD
+      POSTGRES_DB: $DB_NAME
+      # додатковий параметр ініціалізації PostgreSQL
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+      # папка, де PostgreSQL буде зберігати дані
+      PGDATA: /var/lib/postgresql/data/pgdata
+    # volume для збереження даних БД
+    # дані не зникнуть після перезапуску контейнера
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # перевірка готовності бази даних
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    # підключення до мережі backend
+    networks:
+      - backend
+
+  adminer:
+    # легкий веб-інтерфейс для роботи з базою даних
+    image: adminer
+    # ім'я контейнера
+    container_name: adminer-postgres
+    # веб-інтерфейс буде доступний на localhost:8080
+    ports:
+      - 8080:8080
+    # запускається після готовності бази даних
+    depends_on:
+      db:
+        condition: service_healthy
+    # підключення до мережі backend
+    networks:
+      - backend
+
+volumes:
+  # Docker volume для збереження даних PostgreSQL
+  postgres_data:
+    driver: local
+  django_static:
+    driver: local
+  django_media:
+    driver: local
+
+networks:
+  # внутрішня мережа Docker для взаємодії контейнерів
+  backend:
+    driver: bridge
+    # параметр MTU (іноді потрібен для VPN або cloud середовищ)
+    driver_opts:
+      com.docker.network.driver.mtu: 1452
