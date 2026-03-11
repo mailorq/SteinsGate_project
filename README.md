@@ -177,6 +177,10 @@ In main directory (anime_netflix) you need create .env and
 write here 
 
 ```
+SECRET_KEY=''
+DEBUG=''
+ALLOWED_HOSTS=''
+
 DB_NAME='your_db_name'
 DB_USER='your_db_user'
 DB_PASSWORD='your_db_password'
