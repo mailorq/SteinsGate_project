@@ -1,4 +1,4 @@
-# 🎬 Anime Netflix - Steins;Gate Fan Platform
+# 🎬 Steins;Gate Fan Platform
 
 A themed web application dedicated to **Steins;Gate**, where users can watch both seasons, create accounts, customize their profile, and interact through comments.
 
@@ -8,7 +8,7 @@ This project was developed as a **final course project** to demonstrate full-sta
 
 ## 🚀 About The Project
 
-**Anime Netflix** is a niche streaming-style website focused on a single title - *Steins;Gate*.
+Its is a niche streaming-style website focused on a single title - *Steins;Gate*.
 
 Unlike a real streaming service, this platform was built to showcase:
 
@@ -85,8 +85,8 @@ psycopg2-binary
 Clone the repository:
 
 ```
-git clone https://github.com/oniqq1/anime_netflix.git
-cd anime_netflix
+git clone https://github.com/mailorq/SteinsGate_project.git
+cd SteinsGate_project
 ```
 
 Create virtual environment:
@@ -173,7 +173,7 @@ http://127.0.0.1:8000/
 ---
 ## .env
 
-In main directory (anime_netflix) you need create .env and
+In main directory (SteinsGate_project) you need create .env and
 write here 
 
 ```
