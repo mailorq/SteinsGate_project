@@ -1,18 +1,18 @@
 ANIME_PLAYERS = {
     "Steins;Gate": {
         "player_main": "https://www.anilibria.tv/public/iframe.php?id=8674",
-        "player_backup": "//aniqit.com/serial/27423/9bc813cf9293f1305ce036b03845618a/720p?translations=false",
+        "player_backup": "//kodikplayer.com/serial/27423/9bc813cf9293f1305ce036b03845618a/720p?translations=false",
     },
     "Steins;Gate 0": {
         "player_main": "https://www.anilibria.tv/public/iframe.php?id=6140",
-        "player_backup": "//kodik.info/serial/10115/68d9f5d02225e165c1e650faecfaa3d8/720p?translations=false",
+        "player_backup": "//kodikplayer.com/serial/10115/68d9f5d02225e165c1e650faecfaa3d8/720p?translations=false",
     },
     "Steins;Gate: Load Region of Deja Vu": {
         "player_main": "https://www.anilibria.tv/public/iframe.php?id=543",
-        "player_backup": "https://kodik.info/video/20557/82311913135640b736d05a065bf8194a/720p"
+        "player_backup": "https://kodikplayer.com/video/20557/82311913135640b736d05a065bf8194a/720p"
     },
     "Steins;Gate: Kyoukaimenjou no Missing Link": {
-        "player_main": "https://kodik.info/video/86794/6ea90a51ef578ff1a7bcabee705613fc/720p"
+        "player_main": "https://kodikplayer.com/video/86794/6ea90a51ef578ff1a7bcabee705613fc/720p"
     }
 }
 
