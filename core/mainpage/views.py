@@ -43,7 +43,7 @@ def _anime_page(request, anime_name, template):
             logger.warning(f"Spam attempt blocked: {request.user.username} tried to post a link.")
             return redirect(request.path)
 
-        if comment_text and 2 < len(comment_text) < 2000:
+        if comment_text and 2 < len(comment_text) < 400:
             Comment.objects.create(user=request.user, anime=anime, text=comment_text)
             logger.info(f"Anime {anime_name} comment {comment_text} , user={request.user.username}" )
 
