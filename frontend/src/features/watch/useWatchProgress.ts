@@ -26,7 +26,8 @@ function postToPlayer(frame: HTMLIFrameElement, message: object): void {
   try {
     frame.contentWindow?.postMessage(message, new URL(frame.src).origin);
   } catch {
-      }
+    // the iframe may be removed or have an invalid url while the page switches players
+  }
 }
 
 export function useWatchProgress(animeSlug: string, enabled: boolean) {
