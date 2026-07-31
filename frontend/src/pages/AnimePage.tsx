@@ -15,7 +15,8 @@ export function AnimePage() {
   const { slug } = useParams();
   const { user } = useSession();
   const anime = findAnimeBySlug(slug);
-  const { progress, resume } = useWatchProgress(anime?.slug ?? "", anime !== undefined && user !== null);
+  const hasEpisodePlayer = anime?.players.some((player) => player.type === "episodes") ?? false;
+  const { progress, resume } = useWatchProgress(anime?.slug ?? "", anime !== undefined && user !== null && !hasEpisodePlayer);
 
   useEffect(() => {
     if (anime) {
@@ -30,8 +31,8 @@ export function AnimePage() {
   return (
     <>
       <AnimeDescription anime={anime} />
-      <PlayerSwitcher players={anime.players} />
-      <WatchProgressBar progress={progress} onResume={resume} />
+      <PlayerSwitcher key={anime.slug} animeSlug={anime.slug} players={anime.players} />
+      {!hasEpisodePlayer && <WatchProgressBar progress={progress} onResume={resume} />}
       <Faq />
       <CommentsSection animeSlug={anime.slug} />
     </>

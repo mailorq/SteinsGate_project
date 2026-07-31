@@ -22,6 +22,13 @@ function playerFrames(): HTMLIFrameElement[] {
   return Array.from(document.querySelectorAll<HTMLIFrameElement>("iframe.player-embed"));
 }
 
+function postToPlayer(frame: HTMLIFrameElement, message: object): void {
+  try {
+    frame.contentWindow?.postMessage(message, new URL(frame.src).origin);
+  } catch {
+      }
+}
+
 export function useWatchProgress(animeSlug: string, enabled: boolean) {
   const queryClient = useQueryClient();
   const saveTimeoutRef = useRef<number | null>(null);
@@ -65,7 +72,7 @@ export function useWatchProgress(animeSlug: string, enabled: boolean) {
 
     const poll = window.setInterval(() => {
       for (const frame of playerFrames()) {
-        frame.contentWindow?.postMessage({ action: "getTime" }, "*");
+        postToPlayer(frame, { action: "getTime" });
       }
     }, POLL_INTERVAL_MS);
 
@@ -85,7 +92,7 @@ export function useWatchProgress(animeSlug: string, enabled: boolean) {
       return;
     }
     for (const frame of playerFrames()) {
-      frame.contentWindow?.postMessage({ action: "seek", time: progress.current_time }, "*");
+      postToPlayer(frame, { action: "seek", time: progress.current_time });
     }
   }
 
