@@ -38,6 +38,18 @@ body {
   animation: page-enter 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+/* The browser scrollbar is hidden: the component renders one controlled,
+   horizontal-only indicator below the episode buttons. */
+.episode-rail {
+  scroll-padding-inline: 1rem;
+  scrollbar-width: none;
+}
+
+.episode-rail::-webkit-scrollbar {
+  width: 0;
+  display: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .page-enter {
     animation: none;
