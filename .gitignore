@@ -32,3 +32,7 @@ loadtest_report*.html
 loadtest_result*.csv
 loadtest_out/
 backend/*.sqlite3
+.projectctl-state.json
+.env.ctltest_*
+compose.ctltest_*.yaml
+.projectctl-state-*.json

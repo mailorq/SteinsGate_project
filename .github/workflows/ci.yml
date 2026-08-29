@@ -58,6 +58,20 @@ jobs:
           export SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(64))')"
           python manage.py check --deploy --fail-level WARNING
 
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pip install ruff==0.15.20
+      - run: ruff check scripts
+      - name: projectctl tests (включая реальный up/health/down)
+        env:
+          PROJECTCTL_INTEGRATION_UP: "1"
+        run: python -m unittest discover -s scripts -p "test_*.py"
+
   frontend:
     runs-on: ubuntu-latest
     defaults:
