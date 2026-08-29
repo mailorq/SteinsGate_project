@@ -6,6 +6,7 @@ from ninja import File, Router
 from ninja.decorators import decorate_view
 from ninja.files import UploadedFile
 from ninja.security import django_auth
+from ninja.utils import check_csrf
 
 from config.network import get_client_ip
 from config.throttling import anon_throttles, auth_throttles
@@ -42,6 +43,13 @@ def locked_response(error: lockout.LockedOut) -> tuple:
     return 429, {"detail": str(error)}
 
 
+# django-ninja снимает csrf проверку со всех view и возвращает ее только внутри cookie аутентификации, поэтому маршруты без auth проверяют токен сами
+def csrf_rejected(request) -> tuple | None:
+    if check_csrf(request) is not None:
+        return 403, {"detail": "Проверка CSRF не пройдена"}
+    return None
+
+
 @auth_router.get("/csrf", response={204: None})
 @decorate_view(ensure_csrf_cookie)
 def csrf_token(request):
@@ -57,10 +65,13 @@ def session(request):
 
 @auth_router.post(
     "/register",
-    response={201: MessageOut, 400: MessageOut},
+    response={201: MessageOut, 400: MessageOut, 403: MessageOut, 503: MessageOut},
     throttle=AUTH_THROTTLES,
 )
 def register(request, payload: RegisterIn):
+    if (rejected := csrf_rejected(request)) is not None:
+        return rejected
+
     try:
         user = services.register_user(
             username=payload.username,
@@ -69,6 +80,8 @@ def register(request, payload: RegisterIn):
         )
     except services.RegistrationError as error:
         return 400, {"detail": str(error)}
+    except services.EmailDeliveryError as error:
+        return 503, {"detail": str(error)}
 
     request.session["pending_user_id"] = user.id
     return 201, {"detail": "Код подтверждения отправлен на почту"}
@@ -76,10 +89,13 @@ def register(request, payload: RegisterIn):
 
 @auth_router.post(
     "/verify-email",
-    response={200: SessionOut, 400: MessageOut, 429: MessageOut},
+    response={200: SessionOut, 400: MessageOut, 403: MessageOut, 429: MessageOut},
     throttle=AUTH_THROTTLES,
 )
 def verify_email(request, payload: VerifyEmailIn):
+    if (rejected := csrf_rejected(request)) is not None:
+        return rejected
+
     ip = get_client_ip(request)
     try:
         lockout.check_blocked("verify", ip)
@@ -105,10 +121,13 @@ def verify_email(request, payload: VerifyEmailIn):
 
 @auth_router.post(
     "/login",
-    response={200: SessionOut, 400: MessageOut, 429: MessageOut},
+    response={200: SessionOut, 400: MessageOut, 403: MessageOut, 429: MessageOut},
     throttle=AUTH_THROTTLES,
 )
 def login_view(request, payload: LoginIn):
+    if (rejected := csrf_rejected(request)) is not None:
+        return rejected
+
     ip = get_client_ip(request)
     try:
         lockout.check_blocked("login", ip)

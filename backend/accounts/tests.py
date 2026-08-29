@@ -1,10 +1,17 @@
+import io
+import shutil
+import tempfile
 from datetime import timedelta
+from smtplib import SMTPException
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core import mail
 from django.core.cache import cache
-from django.test import TestCase
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import Client, TestCase, override_settings
 from django.utils import timezone
+from PIL import Image
 
 from . import lockout, services
 from .models import EmailVerificationCode
@@ -304,3 +311,169 @@ class ProfileApiTest(TestCase):
         )
 
         self.assertEqual(response.status_code, 401)
+
+
+class CsrfEnforcementTest(TestCase):
+    """django-ninja снимает CSRF со всех view, маршруты без auth проверяют сами"""
+
+    def setUp(self):
+        self.client = Client(enforce_csrf_checks=True)
+        self.payload = {
+            'username': 'okabe',
+            'email': 'okabe@gmail.com',
+            'password': 'complex_pass_123',
+        }
+
+    def test_register_without_token_rejected(self):
+        response = self.client.post(
+            '/api/auth/register', self.payload, content_type='application/json'
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(User.objects.filter(username='okabe').exists())
+
+    def test_login_without_token_rejected(self):
+        response = self.client.post(
+            '/api/auth/login',
+            {'username': 'okabe', 'password': 'complex_pass_123'},
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_verify_without_token_rejected(self):
+        response = self.client.post(
+            '/api/auth/verify-email', {'code': '123456'}, content_type='application/json'
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_register_with_token_accepted(self):
+        response = self.client.post(
+            '/api/auth/register',
+            self.payload,
+            content_type='application/json',
+            **csrf_headers(self.client),
+        )
+        self.assertEqual(response.status_code, 201)
+
+
+class EmailDeliveryFailureTest(TestCase):
+    """Недоступный SMTP должен давать 503, а не 500, и не оставлять аккаунт"""
+
+    def test_smtp_failure_returns_503_and_rolls_back(self):
+        client = Client()
+        payload = {
+            'username': 'daru',
+            'email': 'daru@gmail.com',
+            'password': 'complex_pass_123',
+        }
+
+        with patch(
+            'accounts.services.send_mail', side_effect=SMTPException('smtp is down')
+        ):
+            response = client.post(
+                '/api/auth/register',
+                payload,
+                content_type='application/json',
+                **csrf_headers(client),
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(User.objects.filter(username='daru').exists())
+
+    def test_connection_refused_is_handled(self):
+        with patch('accounts.services.send_mail', side_effect=ConnectionRefusedError()):
+            with self.assertRaises(services.EmailDeliveryError):
+                services.register_user(
+                    username='daru', email='daru@gmail.com', password='complex_pass_123'
+                )
+
+        self.assertFalse(User.objects.filter(username='daru').exists())
+
+
+class StaleRegistrationTest(TestCase):
+
+    def test_expired_unverified_registration_frees_email(self):
+        first = services.register_user(
+            username='squatter', email='victim@gmail.com', password='complex_pass_123'
+        )
+        record = EmailVerificationCode.objects.get(user=first)
+        record.created_at = timezone.now() - EmailVerificationCode.TTL - timedelta(minutes=1)
+        record.save(update_fields=['created_at'])
+
+        second = services.register_user(
+            username='victim', email='victim@gmail.com', password='complex_pass_123'
+        )
+
+        self.assertNotEqual(first.pk, second.pk)
+        self.assertFalse(User.objects.filter(pk=first.pk).exists())
+
+    def test_disabled_account_is_not_purged(self):
+        banned = User.objects.create_user(
+            username='banned', email='banned@gmail.com', password='x', is_active=False
+        )
+
+        with self.assertRaises(services.RegistrationError):
+            services.register_user(
+                username='banned', email='banned@gmail.com', password='complex_pass_123'
+            )
+
+        self.assertTrue(User.objects.filter(pk=banned.pk).exists())
+
+    def test_pending_registration_still_blocks(self):
+        services.register_user(
+            username='squatter', email='victim@gmail.com', password='complex_pass_123'
+        )
+
+        with self.assertRaises(services.RegistrationError):
+            services.register_user(
+                username='victim', email='victim@gmail.com', password='complex_pass_123'
+            )
+
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp(prefix='sg-avatar-test-'))
+class AvatarValidationTest(TestCase):
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls._overridden_settings['MEDIA_ROOT'], ignore_errors=True)
+        super().tearDownClass()
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='mayuri', email='mayuri@gmail.com', password='complex_pass_123'
+        )
+
+    @staticmethod
+    def _png(color: str = 'red') -> SimpleUploadedFile:
+        buffer = io.BytesIO()
+        Image.new('RGB', (8, 8), color).save(buffer, format='PNG')
+        return SimpleUploadedFile('avatar.png', buffer.getvalue(), content_type='image/png')
+
+    def test_disguised_file_rejected(self):
+        payload = SimpleUploadedFile(
+            'avatar.png', b'<html><script>alert(1)</script></html>', content_type='image/png'
+        )
+
+        with self.assertRaises(services.ProfileError):
+            services.update_avatar(user=self.user, avatar=payload)
+
+        self.user.profile.refresh_from_db()
+        self.assertFalse(self.user.profile.avatar)
+
+    def test_real_image_accepted(self):
+        services.update_avatar(user=self.user, avatar=self._png())
+
+        self.user.profile.refresh_from_db()
+        self.assertTrue(self.user.profile.avatar)
+
+    def test_previous_file_removed_on_replace(self):
+        services.update_avatar(user=self.user, avatar=self._png('red'))
+        profile = self.user.profile
+        profile.refresh_from_db()
+        first_path = profile.avatar.path
+        storage = profile.avatar.storage
+
+        services.update_avatar(user=self.user, avatar=self._png('blue'))
+        profile.refresh_from_db()
+
+        self.assertNotEqual(profile.avatar.path, first_path)
+        self.assertFalse(storage.exists(first_path))

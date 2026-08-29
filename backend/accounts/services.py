@@ -10,7 +10,9 @@ from django.contrib.auth.validators import UnicodeUsernameValidator
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.mail import send_mail
 from django.core.validators import validate_email
-from django.db import transaction
+from django.db import IntegrityError, transaction
+from django.db.models import Q
+from PIL import Image
 
 from .models import EmailVerificationCode
 
@@ -33,6 +35,10 @@ class VerificationError(Exception):
     pass
 
 
+class EmailDeliveryError(Exception):
+    pass
+
+
 class ProfileError(Exception):
     pass
 
@@ -42,13 +48,19 @@ def _generate_code() -> str:
 
 
 def _send_code_email(email: str, code: str) -> None:
-    send_mail(
-        subject="Verification Email",
-        message=f"Your verification code is: {code}",
-        from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None),
-        recipient_list=[email],
-        fail_silently=False,
-    )
+    try:
+        send_mail(
+            subject="Verification Email",
+            message=f"Your verification code is: {code}",
+            from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None),
+            recipient_list=[email],
+            fail_silently=False,
+        )
+    except Exception as error:
+        logger.exception("Verification email delivery failed")
+        raise EmailDeliveryError(
+            "Не удалось отправить письмо с кодом. Попробуйте позже."
+        ) from error
 
 
 def _consume_code(record, code: str, not_found_message: str) -> None:
@@ -69,6 +81,18 @@ def _consume_code(record, code: str, not_found_message: str) -> None:
         raise VerificationError(f"Неверный код. Осталось попыток: {remaining}")
 
     record.delete()
+
+
+def _purge_stale_registration(*, username: str, email: str) -> None:
+    candidates = User.objects.filter(is_active=False).filter(
+        Q(username=username) | Q(email__iexact=email)
+    )
+    for user in candidates:
+        record = EmailVerificationCode.objects.filter(user=user).first()
+        if record is not None and record.is_expired:
+            username = user.username
+            user.delete()
+            logger.info(f"Stale registration purged, username={username}")
 
 
 def _validate_registration(*, username: str, email: str, password: str) -> None:
@@ -95,11 +119,16 @@ def _validate_registration(*, username: str, email: str, password: str) -> None:
 
 @transaction.atomic
 def register_user(*, username: str, email: str, password: str) -> User:
+    _purge_stale_registration(username=username, email=email)
     _validate_registration(username=username, email=email, password=password)
 
-    user = User.objects.create_user(
-        username=username, email=email, password=password, is_active=False
-    )
+    try:
+        user = User.objects.create_user(
+            username=username, email=email, password=password, is_active=False
+        )
+    except IntegrityError:
+        # параллельная регистрация успела занять username или email
+        raise RegistrationError("Имя пользователя или email уже используется") from None
     code = _generate_code()
     EmailVerificationCode.objects.create(user=user, code=code)
     _send_code_email(email, code)
@@ -138,6 +167,25 @@ def update_avatar(*, user: User, avatar) -> None:
     if extension not in ALLOWED_AVATAR_EXTENSIONS:
         raise ProfileError("Допустимые форматы: JPG, PNG, GIF, WEBP")
 
-    user.profile.avatar = avatar
-    user.profile.save(update_fields=["avatar"])
+    # расширение подделывается тривиально, содержимое проверяет декодер
+    # save(update_fields=...) не вызывает full_clean, валидаторы ImageField молчат
+    try:
+        Image.open(avatar).verify()
+    except Exception:
+        raise ProfileError("Файл не является изображением") from None
+    finally:
+        avatar.seek(0)
+
+    profile = user.profile
+    previous = profile.avatar.name
+    profile.avatar = avatar
+    profile.save(update_fields=["avatar"])
+
+    # ImageField не удаляет прежний файл
+    if previous and previous != profile.avatar.name:
+        try:
+            profile.avatar.storage.delete(previous)
+        except OSError:
+            logger.warning(f"Old avatar not removed, path={previous}")
+
     logger.debug(f"Avatar changed, user={user.username}")
