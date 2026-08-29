@@ -27,7 +27,8 @@ services:
       VITE_PROXY_TARGET: http://backend:8000
       VITE_USE_POLLING: "1"
     ports: !override
-      - "5173:5173"
+      # только петля: dev-сервер не предназначен для внешней сети
+      - "127.0.0.1:5173:5173"
     volumes:
       - ./frontend:/app
       - frontend_node_modules:/app/node_modules
