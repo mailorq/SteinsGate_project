@@ -1,0 +1,11 @@
+# расширяет стандартный набор правил gitleaks
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Заглушка ключа для локальной разработки: значение публичное и не является секретом"
+regexes = ['''django-insecure-dev-only-key''']
+
+[[allowlists]]
+description = "Шаблон окружения хранит только имена переменных"
+paths = ['''\.env\.example$''']
