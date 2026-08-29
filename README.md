@@ -113,9 +113,11 @@ Logs are split by purpose in `backend/logs/` (rotating files): `access.log` (HTT
 │   │   └── shared/      # api client + generated types, session, ui kit
 │   ├── nginx/           # server config + shared security-headers.conf
 │   └── Dockerfile       # node build stage -> nginx
+├── scripts/             # projectctl: guided setup and stack control
 ├── .claude/skills/      # security checklists used when auditing the project
 ├── compose.yaml         # production-shaped stack
 ├── compose.dev.yaml     # dev override: vite HMR + runserver, host-mounted code
+├── compose.demo.yaml    # demo override: frontend published on loopback only
 └── .env.example
 ```
 
@@ -157,6 +159,25 @@ docker compose up --build
 ```
 
 The application is available at `http://localhost:4173`. Migrations, title seeding and `collectstatic` run automatically on backend start.
+
+### Guided setup on a fresh machine
+
+`scripts/projectctl.py` prepares `.env`, validates the host and brings the stack
+up under a fixed Compose project name, so other Docker projects on the machine
+are untouched. It generates secrets, refuses to start on a misconfigured
+environment (occupied port, `DEBUG=True` on a public interface, a `$` inside a
+secret that Compose would silently mangle) and waits for a real HTTP 200 before
+reporting success.
+
+```
+python scripts/projectctl.py init
+python scripts/projectctl.py validate
+python scripts/projectctl.py up
+```
+
+See [scripts/README.md](scripts/README.md) for modes, ownership checks and the
+full command reference. Note that it runs under its own project name, so it
+starts with a database separate from a plain `docker compose up`.
 
 ### Development mode with hot reload
 
