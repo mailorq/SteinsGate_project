@@ -6,9 +6,11 @@ https://docs.djangoproject.com/en/6.0/topics/settings/
 """
 
 import os
+import secrets
 import sys
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -16,23 +18,68 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 load_dotenv(BASE_DIR.parent / ".env")
 
-# SECURITY WARNING: keep the secret key used in production secret
-SECRET_KEY = os.environ.get("SECRET_KEY", "django-insecure-dev-only-key")
+# Тестовый прогон не имеет .env и не должен требовать боевых секретов
+# или редиректа на https.
+TESTING = "test" in sys.argv
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.environ.get("DEBUG", "True").lower() in ("true", "1", "yes")
+DEBUG = os.environ.get("DEBUG", "False").lower() in ("true", "1", "yes")
 
-ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+
+def _csv_env(name: str, default: str = "") -> list[str]:
+    raw = os.environ.get(name, default)
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _dev_secret_key() -> str:
+    """Стабильный ключ для локальной разработки, свой на каждой машине.
+
+    Константа в репозитории позволяла бы подделывать подписанные Django
+    данные на любом стенде, где забыли .env, поэтому её здесь нет.
+    """
+    key_file = BASE_DIR / ".dev-secret-key"
+    if key_file.exists():
+        stored = key_file.read_text(encoding="utf-8").strip()
+        if stored:
+            return stored
+
+    generated = secrets.token_urlsafe(64)
+    key_file.write_text(generated, encoding="utf-8")
+    return generated
+
+
+# SECURITY WARNING: keep the secret key used in production secret.
+SECRET_KEY = os.environ.get("SECRET_KEY", "")
+if not SECRET_KEY:
+    if TESTING:
+        SECRET_KEY = "secret-key-used-only-by-the-test-suite"
+    elif DEBUG:
+        SECRET_KEY = _dev_secret_key()
+    else:
+        raise ImproperlyConfigured(
+            "SECRET_KEY обязателен: задайте его в .env "
+            "(python -c \"import secrets; print(secrets.token_urlsafe(64))\")"
+        )
+
+ALLOWED_HOSTS = _csv_env("ALLOWED_HOSTS", "localhost,127.0.0.1")
+
+# HTTPS-контур включается одним флагом: cookie с Secure, HSTS и редирект
+# должны переключаться вместе, иначе DEBUG=False без TLS ломает вход —
+# браузер просто не отправит Secure-cookie по http.
+HTTPS_ENABLED = os.environ.get(
+    "HTTPS_ENABLED", str(not DEBUG)
+).lower() in ("true", "1", "yes")
 
 # Cookies
-SESSION_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_SECURE = HTTPS_ENABLED
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'
-CSRF_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_AGE = int(os.environ.get("SESSION_COOKIE_AGE", 60 * 60 * 24 * 14))
+CSRF_COOKIE_SECURE = HTTPS_ENABLED
 CSRF_COOKIE_HTTPONLY = False
 
 # CSRF
-CSRF_TRUSTED_ORIGINS = os.environ.get("CSRF_TRUSTED_ORIGINS", "https://steins.stage-pet.site").split(",")
+CSRF_TRUSTED_ORIGINS = _csv_env("CSRF_TRUSTED_ORIGINS")
 
 # Vite dev-server проксирует /api с подменой Host, Origin браузера с ним не совпадает
 if DEBUG:
@@ -44,16 +91,16 @@ if DEBUG:
     ]
 
 # Заголовки
-SECURE_BROWSER_XSS_FILTER = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = 'strict-origin-when-cross-origin'
 X_FRAME_OPTIONS = 'DENY'
 
 # HTTPS (за nginx: протокол приходит в X-Forwarded-Proto)
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-SECURE_SSL_REDIRECT = not DEBUG
-SECURE_HSTS_SECONDS = 0 if DEBUG else 31536000
-SECURE_HSTS_INCLUDE_SUBDOMAINS = not DEBUG
-SECURE_HSTS_PRELOAD = not DEBUG
+SECURE_SSL_REDIRECT = HTTPS_ENABLED and not TESTING
+SECURE_HSTS_SECONDS = 31536000 if HTTPS_ENABLED else 0
+SECURE_HSTS_INCLUDE_SUBDOMAINS = HTTPS_ENABLED
+SECURE_HSTS_PRELOAD = HTTPS_ENABLED
 
 # Лимиты загрузки
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024   # 10 MB
@@ -172,14 +219,15 @@ EMAIL_BACKEND = os.environ.get(
     'django.core.mail.backends.smtp.EmailBackend',
 )
 
-EMAIL_HOST = 'smtp.gmail.com'
-EMAIL_PORT = 465
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "smtp.gmail.com")
+EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "465"))
 
 EMAIL_HOST_USER = email_host
 EMAIL_HOST_PASSWORD = password_email_host
 
-EMAIL_USE_TLS = False
-EMAIL_USE_SSL = True
+EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", "10"))
+EMAIL_USE_SSL = os.environ.get("EMAIL_USE_SSL", "True").lower() in ("true", "1", "yes")
+EMAIL_USE_TLS = not EMAIL_USE_SSL
 
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 
@@ -243,7 +291,12 @@ API_WRITE_THROTTLE_SUSTAINED = os.environ.get("API_WRITE_THROTTLE_SUSTAINED", "3
 # видит всех клиентов как один адрес прокси
 NINJA_NUM_PROXIES = int(os.environ.get("NINJA_NUM_PROXIES", "1"))
 
-if 'test' in sys.argv:
+# Схема API раскрывает карту эндпоинтов, поэтому по умолчанию она только в DEBUG.
+API_DOCS_ENABLED = os.environ.get(
+    "API_DOCS_ENABLED", str(DEBUG)
+).lower() in ("true", "1", "yes")
+
+if TESTING:
     DATABASES['default'] = {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': ':memory:',

@@ -9,6 +9,9 @@ venv/
 *.env
 !*.env.example
 
+# локальный ключ разработки, создается автоматически
+backend/.dev-secret-key
+
 # Django
 db.sqlite3
 backend/logs/
