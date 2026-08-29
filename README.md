@@ -11,6 +11,7 @@ browser
    |
    v
 nginx (frontend container, :4173)
+   |                security headers + CSP, rate limit on /admin/
    |-- /            SPA static (React build)
    |-- /assets/     hashed bundles, cached immutable
    |-- /img/        posters and backgrounds (WebP)
@@ -59,11 +60,33 @@ Frontend types are regenerated with `npm run gen:api` after the schema changes.
 
 ## Security
 
-- Session authentication with HttpOnly cookies; CSRF is enforced automatically on all session-protected mutations.
+**Authentication and sessions**
+
+- Session authentication with HttpOnly cookies. django-ninja enforces CSRF inside cookie auth, so every session-protected mutation is covered automatically; `register`, `login` and `verify-email` carry no cookie auth and therefore call `check_csrf` explicitly.
+- Registration creates an inactive user; the account activates only after a 6-digit email code (TTL, attempt limit, constant-time comparison). An unverified registration whose code has expired releases its username and address, so a third party cannot squat someone else's email. Disabled accounts are never touched by that cleanup.
+- `User.email` is unique through a partial case-insensitive index, which closes the race between two concurrent sign-ups.
+
+**Abuse control**
+
+- Client IP is read from the trusted right-hand side of `X-Forwarded-For`, matching how django-ninja resolves it. Values a client prepends to the header are ignored, so IP lockout cannot be bypassed by spoofing. Adjust `NINJA_NUM_PROXIES` when adding another proxy hop.
 - Two-level rate limiting per endpoint group (burst + sustained window), counters shared across workers via Redis.
 - IP lockout on credential and code entry: 5 consecutive failures block for 30 seconds, escalating series block for 10 minutes; a successful attempt resets the counter.
-- Registration creates an inactive user; the account activates only after a 6-digit email code (TTL, attempt limit, constant-time comparison).
-- Comment spam filter, upload validation, request body limits. Fail-open degradation: an unavailable Redis is logged but never takes the API down.
+- The Django admin login is outside the application lockout, so nginx rate-limits `/admin/` at the edge.
+- Throttling and lockout degrade fail-open: an unavailable Redis is logged but never takes the API down. This is a deliberate availability trade-off — while Redis is down, login protection is weakened.
+
+**Input and uploads**
+
+- Comment spam filter, request body limits, explicit Pydantic schemas on every route (no auto-binding, so mass assignment is not possible).
+- Avatars are validated by decoding the image, not by trusting the extension; the previous file is deleted on replacement so repeated uploads cannot fill the disk.
+
+**Configuration and perimeter**
+
+- `DEBUG` defaults to `False`, and an empty `SECRET_KEY` with `DEBUG=False` aborts startup instead of silently falling back to a key from the repository.
+- `HTTPS_ENABLED` switches the https redirect, Secure cookies and HSTS as one unit. Splitting them is what makes `DEBUG=False` on a plain-HTTP host fail confusingly: the redirect loops, or Secure cookies are set and never sent back. nginx forwards the original scheme from `X-Forwarded-Proto`, so the stack is ready for a TLS terminator in front of it.
+- A failing SMTP server returns a controlled `503` and rolls the registration back, instead of surfacing as an unhandled `500`. `EMAIL_TIMEOUT` bounds how long a request can wait on the mail server.
+- Both the docs UI and the schema itself are served only when `API_DOCS_ENABLED` is on (default: `DEBUG`) — hiding `/api/docs` alone would leave `/api/openapi.json` readable.
+- Containers run with `no-new-privileges`; the backend and the nginx image drop all capabilities and run as non-root users.
+- nginx sends `nosniff`, `Referrer-Policy`, `X-Frame-Options` and `Permissions-Policy` on everything it serves, a CSP for the SPA, and an isolating `default-src 'none'; sandbox` policy for user uploads. `server_tokens` is off. Headers are set only where nginx serves the response — `/api/` and `/admin/` keep the ones Django's `SecurityMiddleware` produces, so nothing is duplicated.
 
 ## Caching and logging
 
@@ -88,8 +111,9 @@ Logs are split by purpose in `backend/logs/` (rotating files): `access.log` (HTT
 │   │   ├── pages/       # route components
 │   │   ├── features/    # player, comments, rating, watch, avatar crop
 │   │   └── shared/      # api client + generated types, session, ui kit
-│   ├── nginx/           # nginx config used in the frontend image
+│   ├── nginx/           # server config + shared security-headers.conf
 │   └── Dockerfile       # node build stage -> nginx
+├── .claude/skills/      # security checklists used when auditing the project
 ├── compose.yaml         # production-shaped stack
 ├── compose.dev.yaml     # dev override: vite HMR + runserver, host-mounted code
 └── .env.example
@@ -99,18 +123,31 @@ Logs are split by purpose in `backend/logs/` (rotating files): `access.log` (HTT
 
 ### Environment
 
-Copy `.env.example` to `.env` in the repository root and fill in the values.
+Copy `.env.example` to `.env` in the repository root and fill in the values. Generate the secret key with:
+
+```
+python -c "import secrets; print(secrets.token_urlsafe(64))"
+```
+
+With `DEBUG=False` an empty `SECRET_KEY` stops the application on startup. There is no placeholder key in the repository at all: under `DEBUG=True` a random key is generated once into `backend/.dev-secret-key` (git-ignored), so a forgotten `.env` can never fall back to a value an attacker already knows.
+
+Keep the secret URL-safe. `docker compose` treats `$` as variable interpolation, so a `$` inside `SECRET_KEY` silently changes the value the container receives and breaks sessions and CSRF.
 
 | Variable | Purpose |
 |----------|---------|
-| `SECRET_KEY` | Django secret key, required in production |
-| `DEBUG` | `True`/`False`; controls Django diagnostics but does not disable email delivery |
+| `SECRET_KEY` | Django secret key; required whenever `DEBUG=False`, startup fails without it |
+| `DEBUG` | `True`/`False`, defaults to `False`; controls Django diagnostics but does not disable email delivery |
 | `ALLOWED_HOSTS` | Comma-separated host list |
 | `CSRF_TRUSTED_ORIGINS` | Comma-separated origins for production |
 | `APP_PORT` | Host port for the frontend; use a different value when another project uses `4173` |
 | `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT` | Database connection |
 | `REDIS_URL` | Optional; set by compose in Docker, in-process memory is used without it |
 | `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD` | Gmail SMTP credentials (an App Password is required); used in every mode |
+| `HTTPS_ENABLED` | Switches https redirect, Secure cookies and HSTS together; defaults to `not DEBUG`. Keep it off until a TLS terminator sits in front of nginx |
+| `API_DOCS_ENABLED` | Serve `/api/docs` and the OpenAPI schema; defaults to `DEBUG` |
+| `NINJA_NUM_PROXIES` | Trusted proxy hops in front of Django; `1` matches the compose stack |
+| `SESSION_COOKIE_AGE` | Session lifetime in seconds (default 14 days) |
+| `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_USE_SSL`, `EMAIL_TIMEOUT` | SMTP transport; defaults target Gmail over SSL with a 10s timeout |
 | `API_AUTH_THROTTLE`, `API_AUTH_THROTTLE_SUSTAINED`, `API_WRITE_THROTTLE`, `API_WRITE_THROTTLE_SUSTAINED` | Rate limit overrides |
 
 ### Run with Docker
@@ -145,7 +182,14 @@ npm run lint
 npm run build                # strict type check + production build
 ```
 
-CI runs both pipelines on every push and pull request.
+The production configuration profile is verified separately, the same way CI does it:
+
+```
+cd backend
+DEBUG=False SECRET_KEY=... ALLOWED_HOSTS=example.com python manage.py check --deploy --fail-level WARNING
+```
+
+CI runs five jobs on every push to `main`/`dev` and on every pull request: backend tests, the deployment checklist above, the frontend build, `nginx -t` against the real perimeter config, and a Gitleaks scan of the full history.
 
 ## Roadmap
 
@@ -153,7 +197,8 @@ CI runs both pipelines on every push and pull request.
 - [x] django-ninja API over a service layer, domain app split.
 - [x] Redis: two-level throttling, IP lockout, aggregate caching, fail-open degradation.
 - [x] Structured logging, avatar cropping, responsive header, dev compose with HMR.
-- [ ] TLS termination and global nginx hardening (CSP, HSTS in front).
+- [x] Application security pass: client-IP trust model, CSRF on unauthenticated routes, upload validation, edge headers and CSP, secret scanning in CI.
+- [ ] TLS termination in front of nginx. The stack forwards the scheme and gates everything behind `HTTPS_ENABLED`, but no terminator ships with the project, so a public deployment is not complete yet.
 - [ ] Catalog content served from the database instead of the frontend config.
 - [ ] Load testing and measured performance tuning (indexes, microcache).
 
