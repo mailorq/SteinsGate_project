@@ -3,6 +3,7 @@ from django.shortcuts import get_object_or_404
 from ninja import Router
 from ninja.security import django_auth
 
+from accounts.schemas import MessageOut
 from config.network import get_client_ip
 from config.throttling import auth_throttles
 
@@ -50,15 +51,19 @@ def anime_detail(request, slug: str):
 
 @router.post(
     "/anime/{slug}/rating",
-    response=RatingOut,
+    response={200: RatingOut, 400: MessageOut},
     auth=django_auth,
     throttle=WRITE_THROTTLES,
 )
 def rate_anime(request, slug: str, payload: RatingIn):
     anime = get_object_or_404(AnimeDescription, slug=slug)
-    avg_rating = services.rate_anime(user=request.user, anime=anime, rating=payload.rating)
 
-    return {
+    try:
+        avg_rating = services.rate_anime(user=request.user, anime=anime, rating=payload.rating)
+    except ValueError as error:
+        return 400, {"detail": str(error)}
+
+    return 200, {
         "avg_rating": round(avg_rating, 1) if avg_rating else 0,
         "user_rating": payload.rating,
     }

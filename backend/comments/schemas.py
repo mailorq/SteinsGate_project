@@ -29,7 +29,7 @@ class CommentPageOut(Schema):
 
 
 class CommentIn(Schema):
-    text: str = Field(min_length=3, max_length=1000)
+    text: str = Field(min_length=3, max_length=900)
 
 
 class ReactionIn(Schema):

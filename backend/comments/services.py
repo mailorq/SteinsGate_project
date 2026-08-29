@@ -50,8 +50,9 @@ def can_delete(*, user, comment: Comment) -> bool:
 
 
 def delete_comment(*, user, comment: Comment) -> None:
+    comment_id, author = comment.id, comment.user.username
     comment.delete()
-    logger.info(f"Comment {comment.id} deleted, by={user.username}, author={comment.user.username}")
+    logger.info(f"Comment {comment_id} deleted, by={user.username}, author={author}")
 
 
 def comments_for_anime(anime):
