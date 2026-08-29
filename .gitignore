@@ -26,3 +26,9 @@ dist/
 # IDE
 .idea/
 .vscode/
+
+# артефакты нагрузочного прогона
+loadtest_report*.html
+loadtest_result*.csv
+loadtest_out/
+backend/*.sqlite3
