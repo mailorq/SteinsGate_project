@@ -9,3 +9,20 @@ regexes = ['''django-insecure-dev-only-key''']
 [[allowlists]]
 description = "Шаблон окружения хранит только имена переменных"
 paths = ['''\.env\.example$''']
+
+# старые тестовые фикстуры были распознаны стандартным generic-api-key
+# как настоящие ключи. исключение намеренно узкое: только шесть уже
+# проверенных исторических коммитов и только их test файлы. новые секреты
+# (в том числе в этих же файлах) сканер продолжит блокировать
+[[allowlists]]
+description = "Проверенные synthetic credentials в исторических unit-тестах"
+commits = [
+  "df1e1a3f1af3e6b2a829168f853e5ce305980e12",
+  "82f0f00f3fc54da646354105b3ecc42f17751323",
+  "3ea195ee236ec0c56abb307bffb8a621a37f6b69",
+  "e15706c3cf3cd91cfe37c58843052471891afc6d",
+  "91d628007cdc90b627fd1943f52d99f0c984cae2",
+  "fca5d818ef561790ba3c4ceaa95f61ef05e0a4ec",
+]
+paths = ['''(^|/)(backend/(accounts|users)/tests\.py|core/mainpage/tests\.py)$''']
+condition = "AND"
