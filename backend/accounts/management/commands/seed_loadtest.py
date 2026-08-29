@@ -166,7 +166,9 @@ class Command(BaseCommand):
 
             # реакции: часть комментов получает лайки/дизлайки от других юзеров
             fresh = list(
-                Comment.objects.filter(anime=title).order_by("-id")[:deficit]
+                Comment.objects.filter(
+                    anime=title, user__username__startswith=USERNAME_PREFIX
+                ).order_by("-id")[:deficit]
             )
             self._seed_reactions(fresh, pool)
 

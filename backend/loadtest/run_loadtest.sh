@@ -21,12 +21,16 @@ STAGES="50 200 500"
 DURATION="60s"
 SEED_USERS=500
 COMMENTS_PER_TITLE=150
-BASE_URL="http://localhost:4173"
 KEEP=0
 DOWN_ONLY=0
 OUT_DIR="$ROOT_DIR/loadtest_out"
 
-COMPOSE=(docker compose -f compose.yaml -f compose.loadtest.yaml)
+# отдельный проект и порт: свои контейнеры/тома, не трогает локальный стек
+PROJECT="steinsgate_loadtest"
+export APP_PORT="${LOADTEST_APP_PORT:-4273}"
+BASE_URL="http://localhost:${APP_PORT}"
+
+COMPOSE=(docker compose -p "$PROJECT" -f compose.yaml -f compose.loadtest.yaml)
 
 # python из venv проекта (Locust запускается на хосте, не в контейнере)
 if [ -x "$ROOT_DIR/.venv/Scripts/python.exe" ]; then
@@ -62,8 +66,8 @@ docker info >/dev/null 2>&1 || die "Docker daemon недоступен. Запу
 "$PYTHON" -c "import locust" 2>/dev/null || die "locust не установлен: pip install -r backend/requirements-dev.txt"
 
 if [ "$DOWN_ONLY" = "1" ]; then
-  log "Останавливаю стек нагрузочного прогона"
-  "${COMPOSE[@]}" down
+  log "Останавливаю изолированный стек и удаляю его тома"
+  "${COMPOSE[@]}" down -v
   exit 0
 fi
 
@@ -72,12 +76,10 @@ mkdir -p "$OUT_DIR"
 cleanup() {
   local code=$?
   if [ "$KEEP" = "1" ]; then
-    warn "Оставляю стек и данные (--keep). Уборка вручную:"
-    warn "  ${COMPOSE[*]} exec -e LOADTEST=1 backend python manage.py seed_loadtest --flush"
-    warn "  ${COMPOSE[*]} down"
+    warn "Оставляю изолированный стек (--keep). Остановить: ${COMPOSE[*]} down -v"
   else
-    log "Уборка: удаляю тестовые данные loadtest_*"
-    "${COMPOSE[@]}" exec -T backend python manage.py seed_loadtest --flush || warn "flush не удался"
+    log "Останавливаю изолированный стек и удаляю его тома"
+    "${COMPOSE[@]}" down -v || warn "down не удался"
   fi
   exit $code
 }

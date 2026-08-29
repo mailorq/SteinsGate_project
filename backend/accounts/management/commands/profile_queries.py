@@ -14,6 +14,7 @@ LOADTEST=1 python manage.py profile_queries
 import os
 
 from django.contrib.auth.models import User
+from django.core.cache import cache
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connection, transaction
 from django.test import Client
@@ -35,12 +36,17 @@ class Command(BaseCommand):
             raise CommandError("Запустите с LOADTEST=1 (создаёт временные данные, откат гарантирован).")
 
         self.verbose_sql = options["verbose_sql"]
-        # все во внешней транзакции с гарантированным откатом
-        with transaction.atomic():
-            self._run()
-            transaction.set_rollback(True)
+        try:
+            with transaction.atomic():
+                self._run()
+                transaction.set_rollback(True)
+        finally:
+            cache.delete("catalog:anime_list")
 
     def _run(self):
+        # транзакция откатывает бд, но не redis: временные слаги иначе оседают в catalog:anime_list на весь ttl
+        cache.delete("catalog:anime_list")
+
         user = User.objects.create_user(username="__profile_probe__", password="x", is_active=True)
         other = User.objects.create_user(username="__profile_other__", password="x", is_active=True)
 
@@ -71,6 +77,10 @@ class Command(BaseCommand):
         )
 
         self._verdict(n_list, n_list2, n_few, n_full)
+
+        for a in (few, full):
+            cache.delete(f"anime:{a.id}:avg_rating")
+            cache.delete(f"anime:{a.id}:views")
 
     def _make_anime(self, slug: str, *, comments: int, author: User) -> AnimeDescription:
         anime = AnimeDescription.objects.create(

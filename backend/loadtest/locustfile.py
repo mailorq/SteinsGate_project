@@ -166,8 +166,7 @@ class Viewer(HttpUser):
             name="/api/anime/[slug]/comments",
             catch_response=True,
         ) as resp:
-            # 400 - модерация отклонила текст, это валидный ответ, не сбой сервера
-            if resp.status_code in (201, 400):
+            if resp.status_code == 201:
                 resp.success()
             else:
                 resp.failure(f"POST комментария: {resp.status_code}")
@@ -197,8 +196,7 @@ class Viewer(HttpUser):
             name="/api/comments/[id]/reaction",
             catch_response=True,
         ) as resp:
-            # 404 - комментарий уже удален другим юзером, не сбой
-            if resp.status_code in (200, 404):
+            if resp.status_code == 200:
                 resp.success()
             else:
                 resp.failure(f"Реакция: {resp.status_code}")
@@ -222,7 +220,7 @@ class Viewer(HttpUser):
             name="/api/auth/register",
             catch_response=True,
         ) as resp:
-            if resp.status_code in (201, 400):
+            if resp.status_code == 201:
                 resp.success()
             elif resp.status_code == 503:
                 resp.failure("SMTP недоступен — выставьте EMAIL_BACKEND=locmem для прогона")

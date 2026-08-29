@@ -21,85 +21,83 @@
   замокана (`EMAIL_BACKEND=locmem`), иначе уйдут настоящие письма и упрётся в
   таймаут SMTP.
 
-## Подготовка окружения (Postgres + Redis через compose)
+## Быстрый прогон (один скрипт)
 
-Нагрузку гоняем против прод-подобного стека, а не SQLite (тот сериализует
-запись и «захлёбывается» искусственно).
-
-```bash
-# 1. Поднять стек (нужен запущенный Docker Desktop)
-docker compose up -d --build
-
-# 2. Нейтрализовать лимиты и замокать почту ТОЛЬКО на время прогона.
-#    Пробел перед override, чтобы значения не попали в постоянный .env.
-docker compose exec \
-  -e LOADTEST=1 \
-  -e API_AUTH_THROTTLE=100000/m -e API_AUTH_THROTTLE_SUSTAINED=100000/h \
-  -e API_WRITE_THROTTLE=100000/m -e API_WRITE_THROTTLE_SUSTAINED=100000/h \
-  -e EMAIL_BACKEND=django.core.mail.backends.locmem.EmailBackend \
-  backend python manage.py seed_loadtest --users 500 --comments 150
-```
-
-> Лимиты нейтрализуются существующими env-переменными — `settings.py` не меняется.
-> Так измеряется БД/приложение, а не rate-limiter. Сам rate-limiter проверяется
-> отдельно и здесь не смешивается с перф-замером.
->
-> Чтобы override почты и лимитов действовал и на сами HTTP-запросы, перезапустите
-> `backend` с теми же `-e` (или временно добавьте их в окружение сервиса), иначе
-> регистрация упрётся в реальный SMTP.
-
-## Прогон Locust
-
-Веб-режим (наблюдать графики вживую):
+Нужен запущенный Docker Desktop. Скрипт поднимает **изолированный** стек
+(отдельный compose-проект `steinsgate_loadtest`, свои тома, порт 4273 — локальный
+стек на 4173 не затрагивается), наполняет БД, снимает профиль N+1, гоняет Locust
+лестницей и в конце сносит стек вместе с одноразовыми томами.
 
 ```bash
-locust -f backend/loadtest/locustfile.py --host http://localhost:4173
-# открыть http://localhost:8089, задать число юзеров и rate
+backend/loadtest/run_loadtest.sh                       # 50 -> 200 -> 500, по 60с
+backend/loadtest/run_loadtest.sh --stages "100 500 1000" --time 90s
+backend/loadtest/run_loadtest.sh --keep                # оставить стек и данные
+backend/loadtest/run_loadtest.sh --down                # снести изолированный стек
 ```
 
-Headless с рэмпом до 500 (для повторяемых замеров):
+Отчёты (CSV/HTML/профиль) складываются в `loadtest_out/` (в .gitignore).
+
+## Результаты замера
+
+Прогон на dev-машине (Postgres 16 + Redis 7 + gunicorn gthread за nginx),
+конфигурация оверлея `GUNICORN_WORKERS=4 GUNICORN_THREADS=8`. Разовый прогон,
+числа зависят от железа.
+
+| Юзеров | RPS | p50 | p95 | Ошибки |
+|--------|-----|-----|-----|--------|
+| 50     | 26  | 22 ms   | 220 ms   | 0%    |
+| 200    | 90  | 49 ms   | 2200 ms  | 0%    |
+| 500    | 234 | 43 ms   | 1300 ms  | ~0%   |
+| 1000   | 275 | 1000 ms | 9400 ms  | ~0%   |
+
+До перевода gunicorn на gthread (3 sync-воркера) 500 юзеров давали ~83 RPS и
+p95 15000 ms — упор был в число воркеров, не в БД (Postgres держал <1% CPU).
+Профиль N+1: страница комментариев — константа по числу запросов (N+1 нет),
+кэш каталога срабатывает.
+
+## Ручной прогон
+
+Для точечного запуска против уже поднятого стека (без изоляции скрипта):
 
 ```bash
-LOADTEST_USERS=500 locust -f backend/loadtest/locustfile.py \
-  --host http://localhost:4173 \
-  --headless -u 500 -r 25 -t 5m \
-  --csv=loadtest_result --html=loadtest_report.html
+docker compose -f compose.yaml -f compose.loadtest.yaml up -d --build
+docker compose -f compose.yaml -f compose.loadtest.yaml exec -e LOADTEST=1   backend python manage.py seed_loadtest --users 500 --comments 150
+
+LOADTEST_USERS=500 locust -f backend/loadtest/locustfile.py   --host http://localhost:4173 --headless -u 500 -r 25 -t 5m   --csv=loadtest_out/manual --html=loadtest_out/manual.html
 ```
 
-- `-u 500` — пиковое число одновременных пользователей;
-- `-r 25` — скорость набора (юзеров/сек), плавный рэмп;
-- `-t 5m` — длительность;
-- `--csv/--html` — машиночитаемый и наглядный отчёты.
-
-Рекомендуемая лестница для поиска точки перегиба: **50 → 200 → 500**, сравнивая
-p95/p99 и RPS на каждой ступени.
+Оверлей `compose.loadtest.yaml` уже ставит `DEBUG=False`, нейтрализует лимиты
+через env, мокает почту на `locmem` и поднимает конкурентность gunicorn —
+`settings.py` при этом не меняется.
 
 ## Поиск N+1 без нагрузки
 
 ```bash
-docker compose exec -e LOADTEST=1 backend python manage.py profile_queries
-# --verbose-sql — распечатать сами запросы
+docker compose -f compose.yaml -f compose.loadtest.yaml exec -e LOADTEST=1   backend python manage.py profile_queries          # --verbose-sql — печатать SQL
 ```
 
-Печатает число SQL-запросов на каждой ручке. Если на странице комментариев
-число запросов растёт вместе с числом комментов — это N+1. Данные создаются во
-временной транзакции и откатываются.
+Считает число SQL-запросов на ручках. Если на странице комментариев оно растёт
+с числом комментов — это N+1. Данные создаются во временной транзакции и
+откатываются, кэш каталога чистится до и после.
 
 ## На что смотреть в отчёте
 
-- **p95 / p99 латентности** по каждой ручке — резкий рост = узкое место.
-- **% ошибок** — всплеск 5xx под нагрузкой = падение под конкуренцией
-  (дедлоки, исчерпание пула соединений, таймауты).
+- **p95 / p99** по ручке — резкий рост = узкое место.
+- **% ошибок** — всплеск 5xx = падение под конкуренцией (дедлоки, исчерпание
+  пула соединений, таймауты).
 - **RPS-плато** — перестал расти при добавлении юзеров = достигнут потолок.
-- Горячие запросы из `profile_queries` затем разбираются через `EXPLAIN ANALYZE`.
-
-Первые подозреваемые в этом проекте: `GET /api/anime/{slug}` (пишет `ViewHistory`
-на каждый GET) и отсутствие явных индексов на `ViewHistory`/`Comment`.
+- Горячие запросы из `profile_queries` разбираются через `EXPLAIN ANALYZE`.
 
 ## Уборка
 
+Скрипт сам делает `down -v` изолированного проекта (если не `--keep`). Вручную:
+
 ```bash
-docker compose exec -e LOADTEST=1 backend python manage.py seed_loadtest --flush
+docker compose -p steinsgate_loadtest -f compose.yaml -f compose.loadtest.yaml down -v
 ```
 
-Удаляет всех `loadtest_*` пользователей и связанные с ними данные каскадом.
+Если сидили в свой стек напрямую — очистка данных без остановки:
+
+```bash
+docker compose -f compose.yaml -f compose.loadtest.yaml exec -e LOADTEST=1   backend python manage.py seed_loadtest --flush
+```
