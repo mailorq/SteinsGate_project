@@ -45,10 +45,10 @@ backend/loadtest/run_loadtest.sh --down                # снести изоли
 
 | Юзеров | RPS | p50 | p95 | Ошибки |
 |--------|-----|-----|-----|--------|
-| 50     | 26  | 22 ms   | 220 ms   | 0%    |
-| 200    | 90  | 49 ms   | 2200 ms  | 0%    |
-| 500    | 234 | 43 ms   | 1300 ms  | ~0%   |
-| 1000   | 275 | 1000 ms | 9400 ms  | ~0%   |
+| 50 | 26  | 22 ms | 220 ms | 0% |
+| 200 | 90  | 49 ms | 2200 ms  | 0% |
+| 500 | 234 | 43 ms | 1300 ms  | ~0% |
+| 1000 | 275 | 1000 ms | 9400 ms  | ~0% |
 
 До перевода gunicorn на gthread (3 sync-воркера) 500 юзеров давали ~83 RPS и
 p95 15000 ms — упор был в число воркеров, не в БД (Postgres держал <1% CPU).
@@ -61,9 +61,9 @@ p95 15000 ms — упор был в число воркеров, не в БД (P
 
 ```bash
 docker compose -f compose.yaml -f compose.loadtest.yaml up -d --build
-docker compose -f compose.yaml -f compose.loadtest.yaml exec -e LOADTEST=1   backend python manage.py seed_loadtest --users 500 --comments 150
+docker compose -f compose.yaml -f compose.loadtest.yaml exec -e LOADTEST=1 backend python manage.py seed_loadtest --users 500 --comments 150
 
-LOADTEST_USERS=500 locust -f backend/loadtest/locustfile.py   --host http://localhost:4173 --headless -u 500 -r 25 -t 5m   --csv=loadtest_out/manual --html=loadtest_out/manual.html
+LOADTEST_USERS=500 locust -f backend/loadtest/locustfile.py --host http://localhost:4173 --headless -u 500 -r 25 -t 5m --csv=loadtest_out/manual --html=loadtest_out/manual.html
 ```
 
 Оверлей `compose.loadtest.yaml` уже ставит `DEBUG=False`, нейтрализует лимиты
@@ -73,7 +73,7 @@ LOADTEST_USERS=500 locust -f backend/loadtest/locustfile.py   --host http://loca
 ## Поиск N+1 без нагрузки
 
 ```bash
-docker compose -f compose.yaml -f compose.loadtest.yaml exec -e LOADTEST=1   backend python manage.py profile_queries          # --verbose-sql — печатать SQL
+docker compose -f compose.yaml -f compose.loadtest.yaml exec -e LOADTEST=1 backend python manage.py profile_queries   # --verbose-sql — печатать SQL
 ```
 
 Считает число SQL-запросов на ручках. Если на странице комментариев оно растёт
@@ -99,5 +99,5 @@ docker compose -p steinsgate_loadtest -f compose.yaml -f compose.loadtest.yaml d
 Если сидили в свой стек напрямую — очистка данных без остановки:
 
 ```bash
-docker compose -f compose.yaml -f compose.loadtest.yaml exec -e LOADTEST=1   backend python manage.py seed_loadtest --flush
+docker compose -f compose.yaml -f compose.loadtest.yaml exec -e LOADTEST=1 backend python manage.py seed_loadtest --flush
 ```

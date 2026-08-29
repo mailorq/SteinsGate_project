@@ -106,10 +106,6 @@ SECURE_HSTS_PRELOAD = HTTPS_ENABLED
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024   # 10 MB
 FILE_UPLOAD_MAX_MEMORY_SIZE = 8 * 1024 * 1024     # 8 MB
 
-email_host = os.getenv('EMAIL_HOST_USER')
-password_email_host = os.getenv('EMAIL_HOST_PASSWORD')
-
-
 LOG_DIR = BASE_DIR / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
@@ -185,7 +181,6 @@ LOGGING = {
 }
 
 
-
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -222,8 +217,8 @@ EMAIL_BACKEND = os.environ.get(
 EMAIL_HOST = os.environ.get("EMAIL_HOST", "smtp.gmail.com")
 EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "465"))
 
-EMAIL_HOST_USER = email_host
-EMAIL_HOST_PASSWORD = password_email_host
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD')
 
 EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", "10"))
 EMAIL_USE_SSL = os.environ.get("EMAIL_USE_SSL", "True").lower() in ("true", "1", "yes")
