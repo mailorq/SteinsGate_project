@@ -391,6 +391,15 @@ def port_is_free(port: int) -> bool:
     return True
 
 
+def wait_for_port_release(port: int, *, timeout: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while not port_is_free(port):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.1)
+    return True
+
+
 # docker
 
 def run(command: list[str], *, capture: bool = False, timeout: int | None = DOCKER_TIMEOUT):
@@ -808,7 +817,7 @@ EMAIL_HOST_PASSWORD=
 """
 
 
-def cmd_validate(args: argparse.Namespace) -> int:
+def cmd_validate(args: argparse.Namespace, *, retry_port_release: bool = False) -> int:
     path = require_env()
 
     require_docker()
@@ -824,6 +833,8 @@ def cmd_validate(args: argparse.Namespace) -> int:
     if port is not None and not port_is_free(port):
         if project_publishes_port(port):
             warnings.append(f"Порт {port} занят контейнером этого же проекта (стек уже запущен)")
+        elif retry_port_release and wait_for_port_release(port):
+            pass
         else:
             problems.append(
                 f"Порт {port} занят на 127.0.0.1. "
@@ -853,7 +864,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
 
 def cmd_up(args: argparse.Namespace) -> int:
-    cmd_validate(args)
+    cmd_validate(args, retry_port_release=True)
 
     env = read_env(env_path())
     mode = resolve_mode(env)

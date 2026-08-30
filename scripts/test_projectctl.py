@@ -248,6 +248,11 @@ class PortConflictTest(unittest.TestCase):
         port = self._serve(socket.AF_INET, ("0.0.0.0", 0))
         self.assertFalse(ctl.port_is_free(port))
 
+    def test_wait_for_port_release_retries_transient_conflict(self):
+        with mock.patch.object(ctl, "port_is_free", side_effect=[False, True]), \
+             mock.patch.object(ctl.time, "sleep"):
+            self.assertTrue(ctl.wait_for_port_release(4173))
+
 class EnvValidationTest(unittest.TestCase):
 
     def test_valid_env_has_no_problems(self):
@@ -564,11 +569,13 @@ class ExitCodeTest(unittest.TestCase):
 
     def test_logs_fails_when_compose_fails(self):
         with mock.patch.object(ctl, "require_docker"), \
+             mock.patch.object(ctl, "require_env"), \
              mock.patch.object(ctl, "compose", return_value=completed(1)):
             self.assertEqual(ctl.main(["logs"]), 1)
 
     def test_logs_succeeds_when_compose_succeeds(self):
         with mock.patch.object(ctl, "require_docker"), \
+             mock.patch.object(ctl, "require_env"), \
              mock.patch.object(ctl, "compose", return_value=completed(0)):
             self.assertEqual(ctl.main(["logs"]), 0)
 
@@ -771,7 +778,7 @@ class FailedUpRecoveryTest(unittest.TestCase):
             record_mock.assert_called_once()
 
     def test_down_works_after_failed_up(self):
-        with mock.patch.object(ctl, "require_docker"),              mock.patch.object(ctl, "project_containers", return_value=[]),              mock.patch.object(ctl, "project_volumes", return_value=["v"]),              mock.patch.object(ctl, "project_networks", return_value=[]),              mock.patch.object(ctl, "workspace_owns_project", return_value=True),              mock.patch.object(ctl, "verify_recorded_resources", return_value=[]),              mock.patch.object(ctl, "compose", return_value=completed(0)) as compose_mock:
+        with mock.patch.object(ctl, "require_docker"),              mock.patch.object(ctl, "require_env"),              mock.patch.object(ctl, "project_containers", return_value=[]),              mock.patch.object(ctl, "project_volumes", return_value=["v"]),              mock.patch.object(ctl, "project_networks", return_value=[]),              mock.patch.object(ctl, "workspace_owns_project", return_value=True),              mock.patch.object(ctl, "verify_recorded_resources", return_value=[]),              mock.patch.object(ctl, "compose", return_value=completed(0)) as compose_mock:
             self.assertEqual(ctl.main(["down"]), 0)
             compose_mock.assert_called_once()
 
