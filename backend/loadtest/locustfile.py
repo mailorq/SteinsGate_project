@@ -108,6 +108,16 @@ class Viewer(HttpUser):
         if not slug:
             return
         self.client.get(f"/api/anime/{slug}", name="/api/anime/[slug]")
+        with self.client.post(
+            f"/api/anime/{slug}/view",
+            headers=self._csrf_headers(),
+            name="/api/anime/[slug]/view",
+            catch_response=True,
+        ) as resp:
+            if resp.status_code == 204:
+                resp.success()
+            else:
+                resp.failure(f"Просмотр: {resp.status_code}")
         with self.client.get(
             f"/api/anime/{slug}/comments?page=1",
             name="/api/anime/[slug]/comments",
@@ -220,10 +230,8 @@ class Viewer(HttpUser):
             name="/api/auth/register",
             catch_response=True,
         ) as resp:
-            if resp.status_code == 201:
+            if resp.status_code in {201, 202}:
                 resp.success()
-            elif resp.status_code == 503:
-                resp.failure("SMTP недоступен — выставьте EMAIL_BACKEND=locmem для прогона")
             else:
                 resp.failure(f"Регистрация: {resp.status_code}")
 

@@ -2,10 +2,11 @@ from django.conf import settings
 from django.shortcuts import get_object_or_404
 from ninja import Router
 from ninja.security import django_auth
+from ninja.utils import check_csrf
 
 from accounts.schemas import MessageOut
 from config.network import get_client_ip
-from config.throttling import auth_throttles
+from config.throttling import auth_throttles, view_event_throttles
 
 from . import services
 from .models import AnimeDescription
@@ -14,6 +15,9 @@ from .schemas import AnimeDetailOut, AnimeListOut, RatingIn, RatingOut
 router = Router(tags=["catalog"])
 
 WRITE_THROTTLES = auth_throttles(settings.API_WRITE_THROTTLE, settings.API_WRITE_THROTTLE_SUSTAINED)
+VIEW_THROTTLES = view_event_throttles(
+    settings.API_VIEW_THROTTLE, settings.API_VIEW_THROTTLE_SUSTAINED
+)
 
 
 @router.get("/anime", response=list[AnimeListOut])
@@ -21,15 +25,9 @@ def list_anime(request):
     return services.anime_list()
 
 
-@router.get("/anime/{slug}", response=AnimeDetailOut)
+@router.get("/anime/{slug}", response={200: AnimeDetailOut, 404: MessageOut})
 def anime_detail(request, slug: str):
     anime = get_object_or_404(AnimeDescription, slug=slug)
-
-    services.register_view_event(
-        anime=anime,
-        user=request.user,
-        ip_address=get_client_ip(request),
-    )
 
     user_rating = None
     if request.user.is_authenticated:
@@ -47,6 +45,24 @@ def anime_detail(request, slug: str):
         "total_views": services.total_views(anime),
         "user_rating": user_rating,
     }
+
+
+@router.post(
+    "/anime/{slug}/view",
+    response={204: None, 403: MessageOut, 404: MessageOut, 429: MessageOut},
+    throttle=VIEW_THROTTLES,
+)
+def register_view(request, slug: str):
+    if check_csrf(request) is not None:
+        return 403, {"detail": "Проверка CSRF не пройдена"}
+
+    anime = get_object_or_404(AnimeDescription, slug=slug)
+    services.register_view_event(
+        anime=anime,
+        user=request.user,
+        ip_address=get_client_ip(request),
+    )
+    return 204, None
 
 
 @router.post(
