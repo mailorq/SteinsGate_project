@@ -71,7 +71,7 @@ Frontend types are regenerated with `npm run gen:api` after the schema changes.
 
 **Abuse control**
 
-- Client IP is read from the trusted right-hand side of `X-Forwarded-For`, matching how django-ninja resolves it. Values a client prepends to the header are ignored, so IP lockout cannot be bypassed by spoofing. Adjust `NINJA_NUM_PROXIES` when adding another proxy hop.
+- Client IP is read from the trusted right-hand side of `X-Forwarded-For`, matching how django-ninja resolves it. Values a client prepends to the header are ignored, so IP lockout cannot be bypassed by spoofing. Production has two trusted hops (host TLS proxy and compose nginx); the host proxy must replace, not append, the client-supplied forwarding headers.
 - Two-level rate limiting per endpoint group (burst + sustained window), counters shared across workers via Redis.
 - IP lockout on credential and code entry: 5 consecutive failures block for 30 seconds, escalating series block for 10 minutes; a successful attempt resets the counter.
 - The Django admin login is outside the application lockout, so nginx rate-limits `/admin/` at the edge.
@@ -85,7 +85,7 @@ Frontend types are regenerated with `npm run gen:api` after the schema changes.
 **Configuration and perimeter**
 
 - `DEBUG` defaults to `False`, and an empty `SECRET_KEY` with `DEBUG=False` aborts startup instead of silently falling back to a key from the repository.
-- `HTTPS_ENABLED` switches the https redirect, Secure cookies and HSTS as one unit. Splitting them is what makes `DEBUG=False` on a plain-HTTP host fail confusingly: the redirect loops, or Secure cookies are set and never sent back. nginx forwards the original scheme from `X-Forwarded-Proto`, so the stack is ready for a TLS terminator in front of it.
+- `HTTPS_ENABLED` switches the https redirect, Secure cookies and HSTS as one unit. Production requires it and binds the application to loopback only; a host TLS proxy is the sole public entry point and must overwrite the forwarding headers it receives from clients.
 - A failing SMTP server returns a controlled `202` with a pending registration instead of an unhandled `500`; no user is deleted after an ambiguous timeout. `EMAIL_TIMEOUT` bounds how long a request can wait on the mail server. The result only confirms acceptance by the configured mail backend, not final inbox delivery.
 - Both the docs UI and the schema itself are served only when `API_DOCS_ENABLED` is on (default: `DEBUG`) — hiding `/api/docs` alone would leave `/api/openapi.json` readable.
 - Containers run with `no-new-privileges`; the backend and the nginx image drop all capabilities and run as non-root users.
@@ -145,14 +145,14 @@ Keep the secret URL-safe. `docker compose` treats `$` as variable interpolation,
 | `DEBUG` | `True`/`False`, defaults to `False`; controls Django diagnostics but does not disable email delivery |
 | `ALLOWED_HOSTS` | Comma-separated host list |
 | `CSRF_TRUSTED_ORIGINS` | Comma-separated origins for production |
-| `APP_PORT` | Host port for the frontend; use a different value when another project uses `4173` |
+| `APP_PORT` | Loopback-only host port for the frontend; use a different value when another project uses `4173` |
 | `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT` | Database connection |
 | `REDIS_URL` | Optional; set by compose in Docker, in-process memory is used without it |
 | `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD` | Gmail SMTP credentials (an App Password is required); used in every mode |
-| `HTTPS_ENABLED` | Switches https redirect, Secure cookies and HSTS together; defaults to `not DEBUG`. Keep it off until a TLS terminator sits in front of nginx |
+| `HTTPS_ENABLED` | Switches https redirect, Secure cookies and HSTS together; required in production, where a host TLS proxy handles the certificate and HSTS |
 | `API_DOCS_ENABLED` | Serve `/api/docs` and the OpenAPI schema; defaults to `DEBUG` |
 
-| `NINJA_NUM_PROXIES` | Trusted proxy hops in front of Django; `1` matches the compose stack |
+| `NINJA_NUM_PROXIES` | Trusted proxy hops in front of Django; `1` in demo, `2` in production (host TLS proxy plus compose nginx) |
 | `SESSION_COOKIE_AGE` | Session lifetime in seconds (default 14 days) |
 | `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_USE_SSL`, `EMAIL_TIMEOUT` | SMTP transport; defaults target Gmail over SSL with a 10s timeout |
 | `API_AUTH_THROTTLE`, `API_AUTH_THROTTLE_SUSTAINED`, `API_RESEND_THROTTLE`, `API_WRITE_THROTTLE`, `API_WRITE_THROTTLE_SUSTAINED`, `API_VIEW_THROTTLE`, `API_VIEW_THROTTLE_SUSTAINED` | Rate limit overrides |
@@ -178,6 +178,29 @@ python scripts/projectctl.py up
 See [scripts/README.md](scripts/README.md) for modes, ownership checks and the
 full command reference. The application is available at `http://localhost:4173`;
 migrations, title seeding and `collectstatic` run automatically on backend start.
+
+### Public production proxy
+
+The Compose port is intentionally bound only to `127.0.0.1`. For a public
+deployment, put it behind the host's existing TLS reverse proxy; do not change
+the Compose binding to `0.0.0.0`. Inside the proxy's `listen 443 ssl` server,
+the location should follow this trust boundary:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:4173;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto https;
+}
+
+add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+```
+
+The proxy must own the certificate and redirect HTTP to HTTPS. Assigning
+`X-Forwarded-For` from `$remote_addr` (rather than appending a client header)
+prevents clients from forging their apparent address or scheme.
 
 ### Development mode with hot reload
 
@@ -224,7 +247,7 @@ CI runs five jobs on every push to `main`/`dev` and on every pull request: backe
 - [x] Redis: two-level throttling, IP lockout, aggregate caching, fail-open degradation.
 - [x] Structured logging, avatar cropping, responsive header, dev compose with HMR.
 - [x] Application security pass: client-IP trust model, CSRF on unauthenticated routes, upload validation, edge headers and CSP, secret scanning in CI.
-- [ ] TLS termination in front of nginx. The stack forwards the scheme and gates everything behind `HTTPS_ENABLED`, but no terminator ships with the project, so a public deployment is not complete yet.
+- [x] Production perimeter: loopback-only application port and documented TLS reverse-proxy trust boundary.
 - [ ] Catalog content served from the database instead of the frontend config.
 - [ ] Load testing and measured performance tuning (indexes, microcache).
 

@@ -68,7 +68,6 @@ python3 scripts/projectctl.py down
 | `--port` | Порт публикации фронтенда, по умолчанию 4173 |
 | `--rotate-secret` | Заменить `SECRET_KEY` в существующем `.env` |
 | `--allow-debug` | Записать `DEBUG=True`, недопустимо в `production` |
-| `--no-tls` | `production` без TLS-терминатора (`HTTPS_ENABLED=False`) |
 
 `validate` и `up` принимают `--allow-debug`; `up` — ещё `--no-build` и
 `--timeout` (секунды ожидания health-check). `logs` — `--tail N`, `--follow` и
@@ -79,17 +78,19 @@ python3 scripts/projectctl.py down
 **`demo`** — фронтенд публикуется **только на `127.0.0.1`** через overlay
 `compose.demo.yaml`. Подходит для локальной работы и отладки.
 
-**`production`** — фронтенд слушает все интерфейсы, `ALLOWED_HOSTS` берётся из
-`--host`, `HTTPS_ENABLED=True`. `DEBUG=True` в этом режиме запрещён: отладочный
-режим не должен работать на публичном интерфейсе.
+**`production`** — фронтенд слушает только `127.0.0.1`; наружу его должен
+публиковать TLS-прокси хоста. `ALLOWED_HOSTS` берётся из `--host`,
+`HTTPS_ENABLED=True`. `DEBUG=True` в этом режиме запрещён: отладочный режим
+не должен быть доступен через публичный прокси.
 
 Режим записывается в `.env` как `PROJECTCTL_MODE`. Неизвестное значение —
 ошибка, а не молчаливый откат к `production`.
 
-> `HTTPS_ENABLED=True` только включает редирект, Secure-cookie и HSTS. Сам
-> TLS-терминатор (nginx/Caddy/Traefik с сертификатом) в проект не входит и
-> скриптом не проверяется. Без него вход сломается: браузер не отправит
-> Secure-cookie по http.
+> `HTTPS_ENABLED=True` обязательно в `production`: оно включает редирект и
+> Secure-cookie. Сам TLS-терминатор (nginx/Caddy/Traefik с сертификатом) обязан
+> быть на хосте: он принимает публичный HTTPS, сам перезаписывает
+> `X-Forwarded-Proto` и добавляет HSTS. Без него вход сломается: браузер не
+> отправит Secure-cookie по HTTP.
 
 ## Изоляция
 
@@ -140,7 +141,7 @@ python3 scripts/projectctl.py down
 - Наружу публикуется только `frontend`. `validate` разбирает
   `docker compose config`; неразбираемый JSON, отсутствие раздела `services`
   или ошибка Compose — провал проверки, а не «проблем нет».
-- `APP_PORT` проверяется на занятость по IPv4, IPv6 и wildcard. Проверка
+- `APP_PORT` проверяется на занятость на `127.0.0.1`. Проверка
   рекомендательная: гонку между проверкой и стартом дополнительно разбирает `up`.
 - `ALLOWED_HOSTS=*` запрещён в `production`.
 - Все вызовы Compose получают `--env-file` с тем же файлом, который читает сам
