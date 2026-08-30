@@ -248,11 +248,6 @@ class PortConflictTest(unittest.TestCase):
         port = self._serve(socket.AF_INET, ("0.0.0.0", 0))
         self.assertFalse(ctl.port_is_free(port))
 
-    def test_wait_for_port_release_retries_transient_conflict(self):
-        with mock.patch.object(ctl, "port_is_free", side_effect=[False, True]), \
-             mock.patch.object(ctl.time, "sleep"):
-            self.assertTrue(ctl.wait_for_port_release(4173))
-
 class EnvValidationTest(unittest.TestCase):
 
     def test_valid_env_has_no_problems(self):
@@ -764,6 +759,18 @@ class AdoptCommandTest(unittest.TestCase):
 
 
 class FailedUpRecoveryTest(unittest.TestCase):
+
+    def test_up_skips_advisory_port_check(self):
+        args = argparse.Namespace(allow_debug=False, no_build=True, timeout=30)
+        with mock.patch.object(ctl, "cmd_validate") as validate_mock, \
+             mock.patch.object(ctl, "read_env", return_value=valid_env()), \
+             mock.patch.object(ctl, "compose", return_value=completed(0)), \
+             mock.patch.object(ctl, "record_ownership"), \
+             mock.patch.object(ctl, "project_publishes_port", return_value=True), \
+             mock.patch.object(ctl, "wait_for_health"):
+            self.assertEqual(ctl.cmd_up(args), 0)
+
+        validate_mock.assert_called_once_with(args, check_port=False)
 
     def test_ownership_recorded_before_health_check(self):
         calls = []
