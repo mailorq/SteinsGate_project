@@ -8,13 +8,17 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.core import mail
 from django.core.cache import cache
+from django.core.cache.backends.locmem import LocMemCache
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import Client, TestCase, override_settings
+from django.db import connection, transaction
+from django.test import Client, RequestFactory, TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from PIL import Image
 
+from config.throttling import SecurityAnonBurstThrottle
+
 from . import lockout, services
-from .models import EmailVerificationCode
+from .models import EmailDeliveryQuota, EmailVerificationCode, email_delivery_fingerprint
 
 User = get_user_model()
 
@@ -24,7 +28,12 @@ def csrf_headers(client):
     return {"HTTP_X_CSRFTOKEN": client.cookies["csrftoken"].value}
 
 
-class RegistrationServiceTest(TestCase):
+def code_from_email():
+    import re
+    return re.search(r"\b(\d{6})\b", mail.outbox[-1].body).group(1)
+
+
+class RegistrationServiceTest(TransactionTestCase):
 
     def test_email_domain_validation(self):
         with self.assertRaises(services.RegistrationError):
@@ -54,22 +63,85 @@ class RegistrationServiceTest(TestCase):
                 username='test', email='test@gmail.com', password='12345678'
             )
 
+    @override_settings(
+        AUTH_PASSWORD_VALIDATORS=[
+            {
+                'NAME': (
+                    'django.contrib.auth.password_validation.'
+                    'UserAttributeSimilarityValidator'
+                ),
+            },
+        ]
+    )
+    def test_password_similar_to_username_is_rejected(self):
+        with self.assertRaises(services.RegistrationError):
+            services.register_user(
+                username='kurisu', email='kurisu@gmail.com', password='kurisu123'
+            )
 
-class VerificationServiceTest(TestCase):
+    def test_email_is_normalized_before_persistence(self):
+        result = services.register_user(
+            username='test', email='  TEST@GMAIL.COM  ', password='complex_pass_123'
+        )
+
+        self.assertEqual(result.user.email, 'test@gmail.com')
+
+    def test_recipient_delivery_quota_resets_only_after_its_window(self):
+        email = 'test@gmail.com'
+        quota = EmailDeliveryQuota.objects.create(
+            email_fingerprint=email_delivery_fingerprint(email),
+            delivery_count=EmailDeliveryQuota.MAX_DELIVERIES,
+            window_started_at=timezone.now() - EmailDeliveryQuota.WINDOW - timedelta(seconds=1),
+        )
+
+        services.register_user(
+            username='test', email=email, password='complex_pass_123'
+        )
+
+        quota.refresh_from_db()
+        self.assertEqual(quota.delivery_count, 1)
+
+    def test_recipient_delivery_quota_survives_secret_key_rotation(self):
+        email = 'test@gmail.com'
+        quota = EmailDeliveryQuota.objects.create(
+            email_fingerprint=email_delivery_fingerprint(email),
+            delivery_count=EmailDeliveryQuota.MAX_DELIVERIES,
+        )
+
+        with override_settings(SECRET_KEY='rotated-django-secret-for-test-only'):
+            with self.assertRaises(services.EmailDeliveryLimitError):
+                services.register_user(
+                    username='test', email=email, password='complex_pass_123'
+                )
+
+        self.assertEqual(EmailDeliveryQuota.objects.count(), 1)
+        quota.refresh_from_db()
+        self.assertEqual(quota.delivery_count, EmailDeliveryQuota.MAX_DELIVERIES)
+
+
+class VerificationServiceTest(TransactionTestCase):
 
     def setUp(self):
         self.user = services.register_user(
             username='kurisu',
             email='kurisu@gmail.com',
             password='complex_pass_123',
-        )
+        ).user
+        self.code = code_from_email()
 
     def test_registered_user_is_inactive_with_code(self):
         self.assertFalse(self.user.is_active)
-        self.assertEqual(len(self.user.verification_code.code), 6)
+        self.assertEqual(len(self.user.verification_code.code_hash), 64)
+
+    def test_raw_code_is_not_persisted(self):
+        record = self.user.verification_code
+
+        self.assertNotEqual(record.code_hash, self.code)
+        self.assertNotEqual(record.code_nonce, self.code)
+        self.assertFalse(hasattr(record, 'code'))
 
     def test_correct_code_activates_user(self):
-        services.verify_email(user=self.user, code=self.user.verification_code.code)
+        services.verify_email(user=self.user, code=self.code)
 
         self.user.refresh_from_db()
         self.assertTrue(self.user.is_active)
@@ -88,10 +160,11 @@ class VerificationServiceTest(TestCase):
                 services.verify_email(user=self.user, code='000000')
 
         with self.assertRaises(services.VerificationError):
-            services.verify_email(user=self.user, code=self.user.verification_code.code)
+            services.verify_email(user=self.user, code=self.code)
 
         self.user.refresh_from_db()
         self.assertFalse(self.user.is_active)
+        self.assertEqual(self.user.verification_code.attempts, EmailVerificationCode.MAX_ATTEMPTS)
 
     def test_expired_code_rejected(self):
         record = self.user.verification_code
@@ -99,7 +172,7 @@ class VerificationServiceTest(TestCase):
         record.save(update_fields=['created_at'])
 
         with self.assertRaises(services.VerificationError):
-            services.verify_email(user=self.user, code=record.code)
+            services.verify_email(user=self.user, code=self.code)
 
     def test_inactive_user_cannot_login(self):
         logged_in = self.client.login(username='kurisu', password='complex_pass_123')
@@ -107,7 +180,7 @@ class VerificationServiceTest(TestCase):
         self.assertFalse(logged_in)
 
 
-class LockoutTest(TestCase):
+class LockoutTest(TransactionTestCase):
 
     def setUp(self):
         cache.clear()
@@ -186,7 +259,7 @@ class LockoutTest(TestCase):
         self.assertEqual(blocked.status_code, 429)
 
 
-class AuthApiTest(TestCase):
+class AuthApiTest(TransactionTestCase):
 
     def setUp(self):
         cache.clear()
@@ -206,10 +279,24 @@ class AuthApiTest(TestCase):
         response = self.register()
 
         self.assertEqual(response.status_code, 201)
+        self.assertTrue(response.json()['delivery_confirmed'])
+        self.assertGreater(response.json()['resend_available_in'], 0)
         user = User.objects.get(username='kurisu')
         self.assertFalse(user.is_active)
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn('verification', mail.outbox[0].subject.lower())
+
+    def test_register_returns_retry_after_when_recipient_quota_is_exhausted(self):
+        EmailDeliveryQuota.objects.create(
+            email_fingerprint=email_delivery_fingerprint(self.REGISTER_PAYLOAD['email']),
+            delivery_count=EmailDeliveryQuota.MAX_DELIVERIES,
+        )
+
+        response = self.register()
+
+        self.assertEqual(response.status_code, 429)
+        self.assertGreater(int(response['Retry-After']), 0)
+        self.assertFalse(User.objects.filter(username='kurisu').exists())
 
     def test_register_rejects_bad_domain(self):
         response = self.client.post(
@@ -232,12 +319,13 @@ class AuthApiTest(TestCase):
 
         response = self.client.post(
             '/api/auth/verify-email',
-            {'code': user.verification_code.code},
+            {'code': code_from_email()},
             content_type='application/json',
         )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['user']['username'], 'kurisu')
+        self.assertTrue(response.wsgi_request.user.is_active)
         user.refresh_from_db()
         self.assertTrue(user.is_active)
         self.assertEqual(int(self.client.session['_auth_user_id']), user.pk)
@@ -247,6 +335,54 @@ class AuthApiTest(TestCase):
         response = self.client.post(
             '/api/auth/verify-email', {'code': '123456'}, content_type='application/json'
         )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_resend_reuses_still_valid_code_without_creating_another_user(self):
+        self.register()
+        user = User.objects.get(username='kurisu')
+        record = user.verification_code
+        old_hash = record.code_hash
+        old_code = code_from_email()
+        record.last_sent_at = timezone.now() - EmailVerificationCode.RESEND_COOLDOWN
+        record.save(update_fields=['last_sent_at'])
+
+        response = self.client.post('/api/auth/resend-verification')
+
+        self.assertEqual(response.status_code, 200)
+        record.refresh_from_db()
+        self.assertEqual(record.code_hash, old_hash)
+        self.assertEqual(code_from_email(), old_code)
+        self.assertEqual(record.resend_count, 1)
+        self.assertEqual(User.objects.filter(username='kurisu').count(), 1)
+
+    def test_resend_cooldown_returns_retry_after(self):
+        self.register()
+
+        response = self.client.post('/api/auth/resend-verification')
+
+        self.assertEqual(response.status_code, 429)
+        self.assertGreater(int(response['Retry-After']), 0)
+
+    def test_resend_returns_retry_after_when_recipient_quota_is_exhausted(self):
+        self.register()
+        user = User.objects.get(username='kurisu')
+        record = user.verification_code
+        record.last_sent_at = timezone.now() - EmailVerificationCode.RESEND_COOLDOWN
+        record.save(update_fields=['last_sent_at'])
+        quota = EmailDeliveryQuota.objects.get(
+            email_fingerprint=email_delivery_fingerprint(user.email)
+        )
+        quota.delivery_count = EmailDeliveryQuota.MAX_DELIVERIES
+        quota.save(update_fields=['delivery_count'])
+
+        response = self.client.post('/api/auth/resend-verification')
+
+        self.assertEqual(response.status_code, 429)
+        self.assertGreater(int(response['Retry-After']), 0)
+
+    def test_resend_without_pending_registration_is_rejected(self):
+        response = self.client.post('/api/auth/resend-verification')
 
         self.assertEqual(response.status_code, 400)
 
@@ -313,7 +449,7 @@ class ProfileApiTest(TestCase):
         self.assertEqual(response.status_code, 401)
 
 
-class CsrfEnforcementTest(TestCase):
+class CsrfEnforcementTest(TransactionTestCase):
     """django-ninja снимает CSRF со всех view, маршруты без auth проверяют сами"""
 
     def setUp(self):
@@ -345,6 +481,21 @@ class CsrfEnforcementTest(TestCase):
         )
         self.assertEqual(response.status_code, 403)
 
+    def test_resend_without_token_rejected(self):
+        user = User.objects.create_user(
+            username='pending', email='pending@gmail.com', password='complex_pass_123', is_active=False
+        )
+        record = EmailVerificationCode(user=user)
+        record.rotate_code()
+        record.save()
+        session = self.client.session
+        session['pending_user_id'] = user.pk
+        session.save()
+
+        response = self.client.post('/api/auth/resend-verification')
+
+        self.assertEqual(response.status_code, 403)
+
     def test_register_with_token_accepted(self):
         response = self.client.post(
             '/api/auth/register',
@@ -355,10 +506,10 @@ class CsrfEnforcementTest(TestCase):
         self.assertEqual(response.status_code, 201)
 
 
-class EmailDeliveryFailureTest(TestCase):
-    """Недоступный SMTP должен давать 503, а не 500, и не оставлять аккаунт"""
+class EmailDeliveryFailureTest(TransactionTestCase):
+    """SMTP-сбой не удаляет pending-пользователя: письмо могло дойти при таймауте."""
 
-    def test_smtp_failure_returns_503_and_rolls_back(self):
+    def test_smtp_failure_returns_202_and_keeps_user(self):
         client = Client()
         payload = {
             'username': 'daru',
@@ -366,9 +517,7 @@ class EmailDeliveryFailureTest(TestCase):
             'password': 'complex_pass_123',
         }
 
-        with patch(
-            'accounts.services.send_mail', side_effect=SMTPException('smtp is down')
-        ):
+        with patch('accounts.services.send_mail', side_effect=SMTPException('smtp is down')):
             response = client.post(
                 '/api/auth/register',
                 payload,
@@ -376,17 +525,234 @@ class EmailDeliveryFailureTest(TestCase):
                 **csrf_headers(client),
             )
 
+        self.assertEqual(response.status_code, 202)
+        self.assertFalse(response.json()['delivery_confirmed'])
+        self.assertGreater(response.json()['resend_available_in'], 0)
+        user = User.objects.get(username='daru')
+        self.assertFalse(user.is_active)
+        self.assertTrue(EmailVerificationCode.objects.filter(user=user).exists())
+        self.assertEqual(client.session['pending_user_id'], user.pk)
+
+    def test_connection_refused_keeps_user(self):
+        with patch('accounts.services.send_mail', side_effect=ConnectionRefusedError()):
+            result = services.register_user(
+                username='daru', email='daru@gmail.com', password='complex_pass_123'
+            )
+
+        self.assertFalse(result.delivered)
+        self.assertTrue(User.objects.filter(pk=result.user.pk).exists())
+
+    def test_mail_backend_returning_zero_keeps_user_and_reports_unconfirmed_delivery(self):
+        with patch('accounts.services.send_mail', return_value=0):
+            result = services.register_user(
+                username='daru', email='daru@gmail.com', password='complex_pass_123'
+            )
+
+        self.assertFalse(result.delivered)
+        self.assertTrue(User.objects.filter(pk=result.user.pk, is_active=False).exists())
+
+
+class EmailDeliveryTransactionTest(TransactionTestCase):
+    """TransactionTestCase не оборачивает тест во внешнюю atomic-транзакцию."""
+
+    def test_send_happens_outside_database_transaction(self):
+        seen = {}
+
+        def spy(*args, **kwargs):
+            seen['in_atomic_block'] = connection.in_atomic_block
+            return 1
+
+        with patch('accounts.services.send_mail', side_effect=spy):
+            services.register_user(
+                username='daru', email='daru@gmail.com', password='complex_pass_123'
+            )
+
+        self.assertFalse(seen['in_atomic_block'])
+
+
+class DeferredEmailDeliveryTest(TestCase):
+    def test_outer_transaction_defers_delivery_until_real_commit(self):
+        with self.captureOnCommitCallbacks(execute=True) as callbacks:
+            with transaction.atomic():
+                result = services.register_user(
+                    username='daru', email='daru@gmail.com', password='complex_pass_123'
+                )
+                self.assertTrue(result.delivery_scheduled)
+                self.assertFalse(result.delivered)
+                self.assertEqual(len(mail.outbox), 0)
+
+        self.assertEqual(len(callbacks), 1)
+        self.assertEqual(len(mail.outbox), 1)
+
+
+class FailingCache:
+    def get(self, *args, **kwargs):
+        raise RuntimeError('cache unavailable')
+
+
+class SecurityThrottleTest(TransactionTestCase):
+    def test_security_throttle_keeps_retry_after_for_a_normal_limit(self):
+        request = RequestFactory().post('/api/auth/register')
+        throttle = SecurityAnonBurstThrottle('1/m')
+        # Do not share the project's throttle cache: earlier API tests may
+        # legitimately have consumed the loopback address budget.
+        throttle.cache = LocMemCache(f'security-throttle-{id(self)}', {})
+
+        self.assertTrue(throttle.allow_request(request))
+        self.assertFalse(throttle.allow_request(request))
+        self.assertGreater(throttle.wait(), 0)
+
+    def test_security_throttle_fails_closed(self):
+        request = RequestFactory().post('/api/auth/register')
+        throttle = SecurityAnonBurstThrottle('1/m')
+        throttle.cache = FailingCache()
+
+        self.assertFalse(throttle.allow_request(request))
+        self.assertTrue(request._security_throttle_unavailable)
+
+    def test_registration_returns_503_when_throttle_storage_is_unavailable(self):
+        client = Client()
+        with patch.object(SecurityAnonBurstThrottle, 'cache', FailingCache()):
+            response = client.post(
+                '/api/auth/register',
+                {'username': 'daru', 'email': 'daru@gmail.com', 'password': 'complex_pass_123'},
+                content_type='application/json',
+                **csrf_headers(client),
+            )
+
         self.assertEqual(response.status_code, 503)
         self.assertFalse(User.objects.filter(username='daru').exists())
 
-    def test_connection_refused_is_handled(self):
-        with patch('accounts.services.send_mail', side_effect=ConnectionRefusedError()):
-            with self.assertRaises(services.EmailDeliveryError):
-                services.register_user(
-                    username='daru', email='daru@gmail.com', password='complex_pass_123'
-                )
 
-        self.assertFalse(User.objects.filter(username='daru').exists())
+class ResendVerificationServiceTest(TransactionTestCase):
+
+    def setUp(self):
+        with patch('accounts.models.secrets.token_urlsafe', return_value='initial-nonce'):
+            self.user = services.register_user(
+                username='mayuri', email='mayuri@gmail.com', password='complex_pass_123'
+            ).user
+        self.initial_code = code_from_email()
+
+    def make_resendable(self):
+        record = self.user.verification_code
+        record.last_sent_at = timezone.now() - EmailVerificationCode.RESEND_COOLDOWN
+        record.save(update_fields=['last_sent_at'])
+        return record
+
+    def test_resend_reuses_current_code_when_the_previous_delivery_may_have_succeeded(self):
+        self.make_resendable()
+
+        result = services.resend_verification(user=self.user)
+
+        self.assertTrue(result.delivered)
+        self.assertEqual(code_from_email(), self.initial_code)
+        services.verify_email(user=self.user, code=self.initial_code)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.is_active)
+
+    def test_resend_consumes_the_same_recipient_delivery_budget(self):
+        self.make_resendable()
+
+        services.resend_verification(user=self.user)
+
+        quota = EmailDeliveryQuota.objects.get(
+            email_fingerprint=email_delivery_fingerprint(self.user.email)
+        )
+        self.assertEqual(quota.delivery_count, 2)
+
+    def test_expired_code_is_replaced(self):
+        record = self.make_resendable()
+        old_hash = record.code_hash
+        record.created_at = timezone.now() - EmailVerificationCode.TTL - timedelta(seconds=1)
+        record.save(update_fields=['created_at'])
+
+        with patch('accounts.models.secrets.token_urlsafe', return_value='rotated-nonce'):
+            result = services.resend_verification(user=self.user)
+
+        self.assertTrue(result.delivered)
+        new_code = code_from_email()
+        record.refresh_from_db()
+        self.assertNotEqual(record.code_hash, old_hash)
+        self.assertNotEqual(new_code, self.initial_code)
+        with self.assertRaises(services.VerificationError):
+            services.verify_email(user=self.user, code=self.initial_code)
+        services.verify_email(user=self.user, code=new_code)
+
+    def test_unsuccessful_resend_keeps_the_previous_code_valid(self):
+        record = self.make_resendable()
+        old_hash = record.code_hash
+
+        with patch('accounts.services.send_mail', side_effect=SMTPException('timeout')):
+            result = services.resend_verification(user=self.user)
+
+        record.refresh_from_db()
+        self.assertFalse(result.delivered)
+        self.assertEqual(record.code_hash, old_hash)
+        services.verify_email(user=self.user, code=self.initial_code)
+
+    def test_resend_respects_cooldown(self):
+        with self.assertRaises(services.ResendCooldownError) as caught:
+            services.resend_verification(user=self.user)
+
+        self.assertGreater(caught.exception.retry_after, 0)
+
+    def test_resend_respects_limit_until_the_current_code_expires(self):
+        record = self.make_resendable()
+        record.resend_count = EmailVerificationCode.MAX_RESENDS
+        record.save(update_fields=['resend_count'])
+
+        with self.assertRaises(services.ResendLimitError) as caught:
+            services.resend_verification(user=self.user)
+
+        self.assertGreater(caught.exception.retry_after, 0)
+
+    def test_attempt_limit_does_not_reset_the_hourly_resend_limit(self):
+        record = self.make_resendable()
+        record.attempts = EmailVerificationCode.MAX_ATTEMPTS
+        record.resend_count = EmailVerificationCode.MAX_RESENDS
+        record.save(update_fields=['attempts', 'resend_count'])
+
+        with self.assertRaises(services.ResendLimitError):
+            services.resend_verification(user=self.user)
+
+    def test_resend_limit_resets_only_after_its_window(self):
+        record = self.make_resendable()
+        record.resend_count = EmailVerificationCode.MAX_RESENDS
+        record.resend_window_started_at = (
+            timezone.now() - EmailVerificationCode.RESEND_WINDOW - timedelta(seconds=1)
+        )
+        record.save(update_fields=['resend_count', 'resend_window_started_at'])
+
+        result = services.resend_verification(user=self.user)
+
+        record.refresh_from_db()
+        self.assertTrue(result.delivered)
+        self.assertEqual(record.resend_count, 1)
+
+    @override_settings(SECRET_KEY='rotated-verification-key-for-test-only')
+    def test_resend_rotates_code_after_secret_key_change(self):
+        self.make_resendable()
+
+        result = services.resend_verification(user=self.user)
+
+        new_code = code_from_email()
+        self.assertTrue(result.delivered)
+        self.assertNotEqual(new_code, self.initial_code)
+        services.verify_email(user=self.user, code=new_code)
+
+    def test_legacy_record_without_nonce_can_be_resent_immediately(self):
+        record = self.user.verification_code
+        record.code_hash = ''
+        record.code_nonce = ''
+        record.last_sent_at = timezone.now()
+        record.save(update_fields=['code_hash', 'code_nonce', 'last_sent_at'])
+
+        result = services.resend_verification(user=self.user)
+
+        record.refresh_from_db()
+        self.assertTrue(result.delivered)
+        self.assertTrue(record.code_nonce)
+        self.assertTrue(record.matches(code_from_email()))
 
 
 class StaleRegistrationTest(TestCase):
@@ -394,17 +760,38 @@ class StaleRegistrationTest(TestCase):
     def test_expired_unverified_registration_frees_email(self):
         first = services.register_user(
             username='squatter', email='victim@gmail.com', password='complex_pass_123'
-        )
+        ).user
         record = EmailVerificationCode.objects.get(user=first)
         record.created_at = timezone.now() - EmailVerificationCode.TTL - timedelta(minutes=1)
         record.save(update_fields=['created_at'])
 
         second = services.register_user(
             username='victim', email='victim@gmail.com', password='complex_pass_123'
-        )
+        ).user
 
         self.assertNotEqual(first.pk, second.pk)
         self.assertFalse(User.objects.filter(pk=first.pk).exists())
+
+    def test_re_registration_cannot_reset_recipient_delivery_quota(self):
+        first = services.register_user(
+            username='squatter', email='victim@gmail.com', password='complex_pass_123'
+        ).user
+        record = EmailVerificationCode.objects.get(user=first)
+        record.created_at = timezone.now() - EmailVerificationCode.TTL - timedelta(seconds=1)
+        record.save(update_fields=['created_at'])
+        quota = EmailDeliveryQuota.objects.get(
+            email_fingerprint=email_delivery_fingerprint('victim@gmail.com')
+        )
+        quota.delivery_count = EmailDeliveryQuota.MAX_DELIVERIES
+        quota.save(update_fields=['delivery_count'])
+
+        with self.assertRaises(services.EmailDeliveryLimitError):
+            services.register_user(
+                username='victim', email='victim@gmail.com', password='complex_pass_123'
+            )
+
+        self.assertTrue(User.objects.filter(pk=first.pk).exists())
+        self.assertEqual(User.objects.filter(email='victim@gmail.com').count(), 1)
 
     def test_disabled_account_is_not_purged(self):
         banned = User.objects.create_user(

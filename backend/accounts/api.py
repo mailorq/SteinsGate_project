@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.contrib.auth import login, logout
 from django.contrib.auth.models import User
+from django.http import JsonResponse
 from django.views.decorators.csrf import ensure_csrf_cookie
 from ninja import File, Router
 from ninja.decorators import decorate_view
@@ -9,7 +10,7 @@ from ninja.security import django_auth
 from ninja.utils import check_csrf
 
 from config.network import get_client_ip
-from config.throttling import anon_throttles, auth_throttles
+from config.throttling import auth_throttles, resend_throttles, security_anon_throttles
 
 from . import lockout, services
 from .schemas import (
@@ -19,14 +20,18 @@ from .schemas import (
     RegisterIn,
     SessionOut,
     UserOut,
+    VerificationDeliveryOut,
     VerifyEmailIn,
 )
 
 auth_router = Router(tags=["auth"])
 profile_router = Router(tags=["profile"])
 
-AUTH_THROTTLES = anon_throttles(settings.API_AUTH_THROTTLE, settings.API_AUTH_THROTTLE_SUSTAINED)
+AUTH_THROTTLES = security_anon_throttles(
+    settings.API_AUTH_THROTTLE, settings.API_AUTH_THROTTLE_SUSTAINED
+)
 WRITE_THROTTLES = auth_throttles(settings.API_WRITE_THROTTLE, settings.API_WRITE_THROTTLE_SUSTAINED)
+RESEND_THROTTLES = resend_throttles(settings.API_RESEND_THROTTLE)
 
 
 def serialize_user(user: User) -> dict:
@@ -41,6 +46,18 @@ def serialize_user(user: User) -> dict:
 
 def locked_response(error: lockout.LockedOut) -> tuple:
     return 429, {"detail": str(error)}
+
+
+def resend_limited_response(
+    error: (
+        services.EmailDeliveryLimitError
+        | services.ResendCooldownError
+        | services.ResendLimitError
+    ),
+):
+    response = JsonResponse({"detail": str(error)}, status=429)
+    response["Retry-After"] = str(error.retry_after)
+    return response
 
 
 # django-ninja снимает csrf проверку со всех view и возвращает ее только внутри cookie аутентификации, поэтому маршруты без auth проверяют токен сами
@@ -65,7 +82,14 @@ def session(request):
 
 @auth_router.post(
     "/register",
-    response={201: MessageOut, 400: MessageOut, 403: MessageOut, 503: MessageOut},
+    response={
+        201: VerificationDeliveryOut,
+        202: VerificationDeliveryOut,
+        400: MessageOut,
+        403: MessageOut,
+        429: MessageOut,
+        503: MessageOut,
+    },
     throttle=AUTH_THROTTLES,
 )
 def register(request, payload: RegisterIn):
@@ -73,23 +97,92 @@ def register(request, payload: RegisterIn):
         return rejected
 
     try:
-        user = services.register_user(
+        result = services.register_user(
             username=payload.username,
             email=payload.email,
             password=payload.password,
         )
     except services.RegistrationError as error:
         return 400, {"detail": str(error)}
-    except services.EmailDeliveryError as error:
-        return 503, {"detail": str(error)}
+    except services.EmailDeliveryLimitError as error:
+        return resend_limited_response(error)
 
-    request.session["pending_user_id"] = user.id
-    return 201, {"detail": "Код подтверждения отправлен на почту"}
+    # Пользователь и код сохранены в любом случае, дальше подтверждаем через код.
+    request.session["pending_user_id"] = result.user.id
+    if result.delivered:
+        return 201, {
+            "detail": "Код подтверждения отправлен на почту",
+            "delivery_confirmed": True,
+            "resend_available_in": result.resend_available_in,
+        }
+    if result.delivery_scheduled:
+        return 202, {
+            "detail": "Регистрация создана. Отправка кода начнётся после сохранения данных.",
+            "delivery_confirmed": False,
+            "resend_available_in": result.resend_available_in,
+        }
+    return 202, {
+        "detail": "Регистрация создана, но отправку не удалось подтвердить. "
+        "Запросите код повторно.",
+        "delivery_confirmed": False,
+        "resend_available_in": result.resend_available_in,
+    }
+
+
+@auth_router.post(
+    "/resend-verification",
+    response={
+        200: VerificationDeliveryOut,
+        202: VerificationDeliveryOut,
+        400: MessageOut,
+        403: MessageOut,
+        429: MessageOut,
+        503: MessageOut,
+    },
+    throttle=RESEND_THROTTLES,
+)
+def resend_verification(request):
+    if (rejected := csrf_rejected(request)) is not None:
+        return rejected
+
+    pending_user_id = request.session.get("pending_user_id")
+    user = User.objects.filter(id=pending_user_id, is_active=False).first()
+    if user is None:
+        return 400, {"detail": "Нет ожидающей подтверждения регистрации"}
+
+    try:
+        result = services.resend_verification(user=user)
+    except (
+        services.EmailDeliveryLimitError,
+        services.ResendCooldownError,
+        services.ResendLimitError,
+    ) as error:
+        return resend_limited_response(error)
+    except services.VerificationError as error:
+        return 400, {"detail": str(error)}
+
+    if result.delivered:
+        return 200, {
+            "detail": "Код отправлен на почту",
+            "delivery_confirmed": True,
+            "resend_available_in": result.resend_available_in,
+        }
+    if result.delivery_scheduled:
+        return 202, {
+            "detail": "Код создан. Отправка начнётся после сохранения регистрации.",
+            "delivery_confirmed": False,
+            "resend_available_in": result.resend_available_in,
+        }
+    return 202, {
+        "detail": "Код сохранён, но отправку не удалось подтвердить. Попробуйте позже.",
+        "delivery_confirmed": False,
+        "resend_available_in": result.resend_available_in,
+    }
 
 
 @auth_router.post(
     "/verify-email",
-    response={200: SessionOut, 400: MessageOut, 403: MessageOut, 429: MessageOut},
+    response={200: SessionOut, 400: MessageOut, 403: MessageOut, 429: MessageOut, 503: MessageOut},
     throttle=AUTH_THROTTLES,
 )
 def verify_email(request, payload: VerifyEmailIn):
@@ -108,7 +201,7 @@ def verify_email(request, payload: VerifyEmailIn):
         return 400, {"detail": "Нет ожидающей подтверждения регистрации"}
 
     try:
-        services.verify_email(user=user, code=payload.code)
+        user = services.verify_email(user=user, code=payload.code)
     except services.VerificationError as error:
         lockout.register_failure("verify", ip)
         return 400, {"detail": str(error)}
@@ -121,7 +214,7 @@ def verify_email(request, payload: VerifyEmailIn):
 
 @auth_router.post(
     "/login",
-    response={200: SessionOut, 400: MessageOut, 403: MessageOut, 429: MessageOut},
+    response={200: SessionOut, 400: MessageOut, 403: MessageOut, 429: MessageOut, 503: MessageOut},
     throttle=AUTH_THROTTLES,
 )
 def login_view(request, payload: LoginIn):

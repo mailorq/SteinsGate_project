@@ -1,8 +1,15 @@
+import os
+import stat
+import tempfile
+import unittest
+from pathlib import Path
 from unittest.mock import patch
 
+from django.core.exceptions import ImproperlyConfigured
 from django.test import RequestFactory, TestCase
 from ninja.conf import settings as ninja_settings
 
+from . import settings as project_settings
 from .network import get_client_ip
 
 
@@ -32,3 +39,43 @@ class ClientIpTest(TestCase):
         request = self._request("1.2.3.4, 203.0.113.7, 10.0.0.9")
         with patch.object(ninja_settings, "NUM_PROXIES", 2):
             self.assertEqual(get_client_ip(request), "203.0.113.7")
+
+
+@unittest.skipIf(os.name == "nt", "Unix file permissions are not portable on Windows")
+class DevSecretKeyTest(TestCase):
+    def setUp(self):
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.base_dir = Path(self.temporary_directory.name)
+        self.key_file = self.base_dir / ".dev-secret-key"
+
+    def tearDown(self):
+        self.temporary_directory.cleanup()
+
+    def test_creates_and_reuses_owner_only_secret(self):
+        with patch.object(project_settings, "BASE_DIR", self.base_dir):
+            first = project_settings._dev_secret_key()
+            second = project_settings._dev_secret_key()
+
+        self.assertEqual(first, second)
+        self.assertEqual(stat.S_IMODE(self.key_file.stat().st_mode), 0o600)
+
+    def test_tightens_permissions_on_an_existing_secret(self):
+        self.key_file.write_text("existing-secret", encoding="utf-8")
+        os.chmod(self.key_file, 0o644)
+
+        with patch.object(project_settings, "BASE_DIR", self.base_dir):
+            self.assertEqual(project_settings._dev_secret_key(), "existing-secret")
+
+        self.assertEqual(stat.S_IMODE(self.key_file.stat().st_mode), 0o600)
+
+    def test_refuses_a_symlink(self):
+        target = self.base_dir / "target"
+        target.write_text("secret", encoding="utf-8")
+        try:
+            self.key_file.symlink_to(target)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlink is unavailable")
+
+        with patch.object(project_settings, "BASE_DIR", self.base_dir):
+            with self.assertRaises(ImproperlyConfigured):
+                project_settings._dev_secret_key()

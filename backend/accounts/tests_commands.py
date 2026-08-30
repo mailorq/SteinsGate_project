@@ -1,4 +1,5 @@
 import os
+from datetime import timedelta
 from io import StringIO
 from unittest import mock
 
@@ -7,7 +8,9 @@ from django.core.cache import cache
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase
+from django.utils import timezone
 
+from accounts.models import EmailDeliveryQuota, EmailVerificationCode, email_delivery_fingerprint
 from catalog.models import AnimeDescription, ViewHistory
 from comments.models import Comment
 
@@ -58,3 +61,53 @@ class ProfileQueriesCommandTest(TestCase):
         self.assertFalse(AnimeDescription.objects.filter(slug__startswith="profile-").exists())
         self.assertIsNone(cache.get("catalog:anime_list"))
         self.assertIn("N+1", out.getvalue())
+
+
+class PurgeExpiredRegistrationsCommandTest(TestCase):
+    def _pending_user(self, username: str, *, expired: bool) -> User:
+        user = User.objects.create_user(
+            username=username,
+            email=f"{username}@gmail.com",
+            password="complex_pass_123",
+            is_active=False,
+        )
+        record = EmailVerificationCode(user=user)
+        record.rotate_code()
+        if expired:
+            record.created_at = timezone.now() - EmailVerificationCode.TTL - timedelta(seconds=1)
+        record.save()
+        return user
+
+    def test_dry_run_leaves_records_untouched(self):
+        user = self._pending_user("expired", expired=True)
+
+        call_command("purge_expired_registrations", "--dry-run", stdout=StringIO())
+
+        self.assertTrue(User.objects.filter(pk=user.pk).exists())
+
+    def test_removes_only_expired_pending_registrations(self):
+        expired = self._pending_user("expired", expired=True)
+        current = self._pending_user("current", expired=False)
+        disabled = User.objects.create_user(
+            username="disabled", email="disabled@gmail.com", password="complex_pass_123", is_active=False
+        )
+
+        call_command("purge_expired_registrations", stdout=StringIO())
+
+        self.assertFalse(User.objects.filter(pk=expired.pk).exists())
+        self.assertTrue(User.objects.filter(pk=current.pk).exists())
+        self.assertTrue(User.objects.filter(pk=disabled.pk).exists())
+
+    def test_removes_only_expired_delivery_quotas(self):
+        expired = EmailDeliveryQuota.objects.create(
+            email_fingerprint=email_delivery_fingerprint("expired@gmail.com"),
+            window_started_at=timezone.now() - EmailDeliveryQuota.WINDOW - timedelta(seconds=1),
+        )
+        current = EmailDeliveryQuota.objects.create(
+            email_fingerprint=email_delivery_fingerprint("current@gmail.com"),
+        )
+
+        call_command("purge_expired_registrations", stdout=StringIO())
+
+        self.assertFalse(EmailDeliveryQuota.objects.filter(pk=expired.pk).exists())
+        self.assertTrue(EmailDeliveryQuota.objects.filter(pk=current.pk).exists())

@@ -34,3 +34,8 @@ class SessionOut(Schema):
 
 class MessageOut(Schema):
     detail: str
+
+
+class VerificationDeliveryOut(MessageOut):
+    delivery_confirmed: bool
+    resend_available_in: int
