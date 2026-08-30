@@ -4,6 +4,7 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    public retryAfter: number | null = null,
   ) {
     super(message);
     this.name = "ApiError";
@@ -74,7 +75,12 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   const data = await response.json().catch(() => null);
 
   if (!response.ok) {
-    throw new ApiError(response.status, extractDetail(data, response.status));
+    const retryAfter = Number.parseInt(response.headers.get("Retry-After") ?? "", 10);
+    throw new ApiError(
+      response.status,
+      extractDetail(data, response.status),
+      Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null,
+    );
   }
 
   return data as T;

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ClipboardEvent, FormEvent, KeyboardEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { ApiError, authApi } from "@/shared/api";
 import { useSession } from "@/shared/session/SessionContext";
@@ -8,13 +8,30 @@ import { FormCard } from "@/shared/ui/FormCard";
 
 const CODE_LENGTH = 6;
 
+interface VerificationNavigationState {
+  deliveryConfirmed?: boolean;
+  resendAvailableIn?: number;
+}
+
 export function VerifyEmailPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { setUser } = useSession();
   const [digits, setDigits] = useState<string[]>(Array(CODE_LENGTH).fill(""));
   const [error, setError] = useState<string | null>(null);
+  const [resendMessage, setResendMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isResending, setIsResending] = useState(false);
+  const navigationState = location.state as VerificationNavigationState | null;
+  const [resendCooldown, setResendCooldown] = useState(
+    typeof navigationState?.resendAvailableIn === "number"
+      ? Math.max(navigationState.resendAvailableIn, 0)
+      : 0,
+  );
   const inputsRef = useRef<(HTMLInputElement | null)[]>([]);
+  const [hasUnconfirmedDelivery, setHasUnconfirmedDelivery] = useState(
+    navigationState?.deliveryConfirmed === false,
+  );
 
   const code = digits.join("");
   const isComplete = code.length === CODE_LENGTH && /^\d{6}$/.test(code);
@@ -23,6 +40,16 @@ export function VerifyEmailPage() {
     document.title = "Email Verification";
     inputsRef.current[0]?.focus();
   }, []);
+
+  useEffect(() => {
+    if (resendCooldown <= 0) {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      setResendCooldown((remaining) => Math.max(remaining - 1, 0));
+    }, 1_000);
+    return () => window.clearInterval(interval);
+  }, [resendCooldown]);
 
   function setDigit(index: number, value: string) {
     const digit = value.replace(/\D/g, "").charAt(0) ?? "";
@@ -73,14 +100,51 @@ export function VerifyEmailPage() {
     }
   }
 
+  async function handleResend() {
+    if (isResending || resendCooldown > 0) {
+      return;
+    }
+
+    setIsResending(true);
+    setError(null);
+    setResendMessage(null);
+    try {
+      const result = await authApi.resendVerification();
+      setHasUnconfirmedDelivery(!result.delivery_confirmed);
+      setResendCooldown(result.resend_available_in);
+      setResendMessage(
+        result.delivery_confirmed
+          ? "Код отправлен. Проверьте входящие и папку «Спам»."
+          : "Код сохранён, но доставку не удалось подтвердить. Попробуйте ещё раз позже.",
+      );
+      setDigits(Array(CODE_LENGTH).fill(""));
+      inputsRef.current[0]?.focus();
+    } catch (requestError) {
+      if (requestError instanceof ApiError && requestError.retryAfter) {
+        setResendCooldown(requestError.retryAfter);
+      }
+      setResendMessage(
+        requestError instanceof ApiError ? requestError.message : "Не удалось отправить код",
+      );
+    } finally {
+      setIsResending(false);
+    }
+  }
+
   return (
     <FormCard title="Email Verification" maxWidthClass="max-w-[30rem]">
       <p className="mb-6 text-center text-sm leading-relaxed text-zinc-500">
-        A D-Mail has been sent to your inbox. Enter the 6-digit code to prove you exist in this
-        worldline.
+        Enter the 6-digit code from the D-Mail. If it does not arrive, request another send below.
       </p>
 
+      {hasUnconfirmedDelivery && (
+        <div className="mb-4 text-center text-sm text-amber-300" role="status">
+          Регистрация сохранена, но отправку письма не удалось подтвердить. Попробуйте отправить код ещё раз.
+        </div>
+      )}
+
       {error && <div className="mb-4 text-center text-sm text-red-500">{error}</div>}
+      {resendMessage && <div className="mb-4 text-center text-sm text-zinc-400" role="status">{resendMessage}</div>}
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-6">
         <div className="w-full">
@@ -115,6 +179,21 @@ export function VerifyEmailPage() {
           Verify
         </button>
       </form>
+
+      <div className="mt-6 text-center">
+        <button
+          type="button"
+          disabled={isResending || resendCooldown > 0}
+          onClick={handleResend}
+          className="text-sm text-amber-400 transition-colors hover:text-amber-300 disabled:cursor-not-allowed disabled:text-zinc-600"
+        >
+          {isResending
+            ? "Отправляем…"
+            : resendCooldown > 0
+              ? `Повторить через ${resendCooldown} с`
+              : "Отправить код повторно"}
+        </button>
+      </div>
 
       <div className="mt-6 text-center">
         <Link to="/register" className="text-sm text-amber-400 transition-colors hover:text-amber-300">

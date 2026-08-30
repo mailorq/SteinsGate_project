@@ -6,6 +6,7 @@ type Schemas = components["schemas"];
 export type UserOut = Schemas["UserOut"];
 export type SessionOut = Schemas["SessionOut"];
 export type MessageOut = Schemas["MessageOut"];
+export type VerificationDeliveryOut = Schemas["VerificationDeliveryOut"];
 export type AnimeDetailOut = Schemas["AnimeDetailOut"];
 export type RatingOut = Schemas["RatingOut"];
 export type CommentOut = Schemas["CommentOut"];
@@ -18,7 +19,9 @@ export { ApiError } from "./client";
 export const authApi = {
   session: () => request<SessionOut>("/auth/session"),
   register: (payload: { username: string; email: string; password: string }) =>
-    request<MessageOut>("/auth/register", { method: "POST", json: payload }),
+    request<VerificationDeliveryOut>("/auth/register", { method: "POST", json: payload }),
+  resendVerification: () =>
+    request<VerificationDeliveryOut>("/auth/resend-verification", { method: "POST" }),
   verifyEmail: (code: string) =>
     request<SessionOut>("/auth/verify-email", { method: "POST", json: { code } }),
   login: (payload: { username: string; password: string }) =>
@@ -38,6 +41,7 @@ export const profileApi = {
 
 export const catalogApi = {
   detail: (slug: string) => request<AnimeDetailOut>(`/anime/${slug}`),
+  registerView: (slug: string) => request<void>(`/anime/${slug}/view`, { method: "POST" }),
   rate: (slug: string, rating: number) =>
     request<RatingOut>(`/anime/${slug}/rating`, { method: "POST", json: { rating } }),
 };

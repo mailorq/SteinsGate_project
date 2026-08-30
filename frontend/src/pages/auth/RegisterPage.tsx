@@ -55,8 +55,13 @@ export function RegisterPage() {
     setIsSubmitting(true);
     setServerError(null);
     try {
-      await authApi.register({ username: username.trim(), email, password });
-      navigate("/verify-email");
+      const result = await authApi.register({ username: username.trim(), email, password });
+      navigate("/verify-email", {
+        state: {
+          deliveryConfirmed: result.delivery_confirmed,
+          resendAvailableIn: result.resend_available_in,
+        },
+      });
     } catch (error) {
       setServerError(error instanceof ApiError ? error.message : "Не удалось выполнить запрос");
     } finally {

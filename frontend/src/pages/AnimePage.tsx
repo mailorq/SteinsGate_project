@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Navigate, useParams } from "react-router-dom";
 
 import { CommentsSection } from "@/features/comments/CommentsSection";
@@ -6,6 +6,7 @@ import { PlayerSwitcher } from "@/features/player/PlayerSwitcher";
 import { RatingStars } from "@/features/rating/RatingStars";
 import { WatchProgressBar } from "@/features/watch/WatchProgressBar";
 import { useWatchProgress } from "@/features/watch/useWatchProgress";
+import { catalogApi } from "@/shared/api";
 import { findAnimeBySlug } from "@/shared/config/animes";
 import type { AnimeInfo } from "@/shared/config/animes";
 import { useSession } from "@/shared/session/SessionContext";
@@ -15,6 +16,8 @@ export function AnimePage() {
   const { slug } = useParams();
   const { user } = useSession();
   const anime = findAnimeBySlug(slug);
+  const animeSlug = anime?.slug;
+  const trackedAnimeSlug = useRef<string | null>(null);
   const hasEpisodePlayer = anime?.players.some((player) => player.type === "episodes") ?? false;
   const { progress, resume } = useWatchProgress(anime?.slug ?? "", anime !== undefined && user !== null && !hasEpisodePlayer);
 
@@ -23,6 +26,19 @@ export function AnimePage() {
       document.title = anime.name;
     }
   }, [anime]);
+
+  useEffect(() => {
+    if (!animeSlug) {
+      return;
+    }
+
+    if (trackedAnimeSlug.current === animeSlug) {
+      return;
+    }
+
+    trackedAnimeSlug.current = animeSlug;
+    void catalogApi.registerView(animeSlug).catch(() => undefined);
+  }, [animeSlug]);
 
   if (!anime) {
     return <Navigate to="/steins-gate" replace />;
