@@ -31,7 +31,12 @@ HEALTH_PATH = "/api/anime"
 ROOT = Path(__file__).resolve().parent.parent
 
 MIN_SECRET_LENGTH = 50
-INTERPOLATED_SECRETS = ("SECRET_KEY", "DB_PASSWORD", "EMAIL_HOST_PASSWORD")
+INTERPOLATED_SECRETS = (
+    "SECRET_KEY",
+    "EMAIL_DELIVERY_QUOTA_SECRET",
+    "DB_PASSWORD",
+    "EMAIL_HOST_PASSWORD",
+)
 OPTIONAL_SECRETS = ("EMAIL_HOST_PASSWORD",)
 PUBLISHING_SERVICES = {"frontend"}
 DEFAULT_PORT = 4173
@@ -201,14 +206,18 @@ def validate_interpolation_safe(key: str, value: str) -> list[str]:
     return problems
 
 
-def validate_secret(value: str) -> list[str]:
+def validate_required_secret(key: str, value: str) -> list[str]:
     if not value:
-        return ["SECRET_KEY пуст. Сгенерируйте: projectctl.py init --rotate-secret"]
+        return [f"{key} пуст. Сгенерируйте URL-safe секрет длиной не менее {MIN_SECRET_LENGTH}"]
     problems = []
     if len(value) < MIN_SECRET_LENGTH:
-        problems.append(f"SECRET_KEY короче {MIN_SECRET_LENGTH} символов")
-    problems.extend(validate_interpolation_safe("SECRET_KEY", value))
+        problems.append(f"{key} короче {MIN_SECRET_LENGTH} символов")
+    problems.extend(validate_interpolation_safe(key, value))
     return problems
+
+
+def validate_secret(value: str) -> list[str]:
+    return validate_required_secret("SECRET_KEY", value)
 
 
 def validate_host(value: str) -> tuple[str, list[str]]:
@@ -269,10 +278,16 @@ def validate_env_values(env: dict[str, str], *, allow_debug: bool) -> tuple[list
     warnings: list[str] = []
 
     problems.extend(validate_secret(env.get("SECRET_KEY", "")))
+    problems.extend(
+        validate_required_secret(
+            "EMAIL_DELIVERY_QUOTA_SECRET",
+            env.get("EMAIL_DELIVERY_QUOTA_SECRET", ""),
+        )
+    )
 
     for key in INTERPOLATED_SECRETS:
         value = env.get(key, "")
-        if key == "SECRET_KEY":
+        if key in {"SECRET_KEY", "EMAIL_DELIVERY_QUOTA_SECRET"}:
             continue
         if not value:
             if key not in OPTIONAL_SECRETS:
@@ -323,7 +338,10 @@ def validate_env_values(env: dict[str, str], *, allow_debug: bool) -> tuple[list
             "Без него Secure-cookie не дойдут и вход не сработает"
         )
     if not env.get("EMAIL_HOST_USER") or not env.get("EMAIL_HOST_PASSWORD"):
-        warnings.append("EMAIL_HOST_USER/EMAIL_HOST_PASSWORD пусты - регистрация вернет 503")
+        warnings.append(
+            "EMAIL_HOST_USER/EMAIL_HOST_PASSWORD пусты — письмо не подтвердится; "
+            "регистрация вернёт 202 и потребуется повторная отправка"
+        )
     if mode == "production":
         warnings.append("Режим production: фронтенд публикуется на всех интерфейсах")
 
@@ -336,8 +354,37 @@ def validate_env_values(env: dict[str, str], *, allow_debug: bool) -> tuple[list
 # порт
 
 
-def port_is_free(port: int) -> bool:
-    for host, family in (("127.0.0.1", socket.AF_INET), ("::1", socket.AF_INET6)):
+def port_is_free(port: int, *, mode: str = "production") -> bool:
+    """Preflight the exact host bindings Compose will request.
+
+    A loopback connection cannot see a process bound only to another interface,
+    so production probes wildcard binds instead. This remains advisory: another
+    process can claim the port between this check and ``docker compose up``.
+    """
+    bindings = [("127.0.0.1", socket.AF_INET)] if mode == "demo" else [
+        ("0.0.0.0", socket.AF_INET),
+    ]
+    if mode != "demo" and socket.has_ipv6:
+        bindings.append(("::", socket.AF_INET6))
+
+    for host, family in bindings:
+        try:
+            with socket.socket(family, socket.SOCK_STREAM) as probe:
+                if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                    probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                if family == socket.AF_INET6:
+                    probe.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+                probe.bind((host, port))
+        except OSError:
+            return False
+
+    # Windows can permit a wildcard bind alongside a listener that opted into
+    # SO_REUSEADDR. Probe the loopbacks too, so an occupied local address is
+    # never reported as free.
+    reachable = [("127.0.0.1", socket.AF_INET)]
+    if mode != "demo" and socket.has_ipv6:
+        reachable.append(("::1", socket.AF_INET6))
+    for host, family in reachable:
         try:
             with socket.socket(family, socket.SOCK_STREAM) as probe:
                 probe.settimeout(0.5)
@@ -651,9 +698,29 @@ def wait_for_health(port: int, timeout: int) -> None:
 def cmd_init(args: argparse.Namespace) -> int:
     path = env_path()
 
+    if path.is_symlink():
+        raise CtlError(
+            f"{path.name} является символической ссылкой. "
+            "Запись или чтение через неё небезопасны."
+        )
     if path.exists():
+        env = read_env(path)
+        if not env.get("EMAIL_DELIVERY_QUOTA_SECRET"):
+            # Existing deployments used SECRET_KEY as the quota HMAC key before
+            # it became its own stable setting. Copying it once preserves the
+            # currently active one-hour budget, while later key rotation leaves
+            # that budget intact. The secret itself is never printed.
+            legacy_secret = env.get("SECRET_KEY", "")
+            if not validate_secret(legacy_secret):
+                set_env_value(path, "EMAIL_DELIVERY_QUOTA_SECRET", legacy_secret)
+                ok("Добавлен EMAIL_DELIVERY_QUOTA_SECRET для стабильной квоты писем")
+            else:
+                warn(
+                    "EMAIL_DELIVERY_QUOTA_SECRET отсутствует, а SECRET_KEY нельзя "
+                    "безопасно перенести. Заполните оба секрета вручную."
+                )
         if not args.rotate_secret:
-            info(f"{ENV_FILE} уже существует, файл не тронут")
+            info(f"{ENV_FILE} уже существует")
             info("Для смены ключа: projectctl.py init --rotate-secret")
             return 0
         set_env_value(path, "SECRET_KEY", generate_secret())
@@ -685,7 +752,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     )
 
     ok(f"Создан {ENV_FILE} (режим: {args.mode}, порт: {port})")
-    ok("SECRET_KEY и DB_PASSWORD сгенерированы и в консоль не выводятся")
+    ok("SECRET_KEY, EMAIL_DELIVERY_QUOTA_SECRET и DB_PASSWORD сгенерированы и не выводятся")
     if os.name == "nt":
         warn("Windows: ограничьте доступ к .env через icacls (см. scripts/README.md)")
     else:
@@ -693,10 +760,13 @@ def cmd_init(args: argparse.Namespace) -> int:
     if args.mode == "demo":
         ok("Режим demo: фронтенд публикуется только на 127.0.0.1")
     if args.allow_debug:
-        warn("DEBUG=True — только для локальной отладки")
+        warn("DEBUG=True разрешён только в demo: публикация остаётся на loopback")
     if args.mode == "production" and args.no_tls:
         warn("HTTPS_ENABLED=False: перед публикацией поставьте TLS-терминатор")
-    info("Заполните EMAIL_HOST_USER/EMAIL_HOST_PASSWORD, иначе регистрация вернёт 503")
+    info(
+        "Заполните EMAIL_HOST_USER/EMAIL_HOST_PASSWORD, иначе письмо не подтвердится "
+        "и регистрация вернёт 202"
+    )
     info("Дальше: projectctl.py validate")
     return 0
 
@@ -711,10 +781,12 @@ def render_env(*, mode: str, host: str, port: int, debug: bool, https: bool) -> 
         origins = f"http://localhost:{port},http://127.0.0.1:{port}"
 
     return f"""# Создан scripts/projectctl.py. Не коммитить.
-# Секреты сгенерированы автоматически, менять только через --rotate-secret.
+# SECRET_KEY меняйте только через --rotate-secret; quota-secret оставляйте стабильным.
 
 PROJECTCTL_MODE={mode}
 SECRET_KEY={generate_secret()}
+# Стабильный ключ квоты: не меняется при init --rotate-secret.
+EMAIL_DELIVERY_QUOTA_SECRET={generate_secret()}
 DEBUG={debug}
 HTTPS_ENABLED={https}
 ALLOWED_HOSTS={allowed_hosts}
@@ -727,7 +799,7 @@ DB_PASSWORD={generate_secret()}
 DB_HOST=127.0.0.1
 DB_PORT=5432
 
-# Заполните, иначе регистрация вернёт 503 (письмо с кодом не уйдет).
+# Заполните, иначе письмо с кодом не подтвердится (регистрация вернёт 202).
 EMAIL_HOST=smtp.gmail.com
 EMAIL_PORT=465
 EMAIL_TIMEOUT=10
@@ -750,7 +822,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
     problems.extend(check_ownership())
 
     port, _ = validate_port(env.get("APP_PORT", ""))
-    if port is not None and not port_is_free(port):
+    if port is not None and not port_is_free(port, mode=mode):
         if project_publishes_port(port):
             warnings.append(f"Порт {port} занят контейнером этого же проекта (стек уже запущен)")
         else:
@@ -794,7 +866,7 @@ def cmd_up(args: argparse.Namespace) -> int:
     info(f"Запускаю стек '{PROJECT_NAME}' (режим: {mode})")
     result = compose("up", "-d", *build_args, mode=mode, timeout=BUILD_TIMEOUT)
     if result.returncode != 0:
-        if not port_is_free(port) and not project_publishes_port(port):
+        if not port_is_free(port, mode=mode) and not project_publishes_port(port):
             raise CtlError(
                 f"Не удалось запустить: порт {port} занят другим процессом "
                 "(освободился между проверкой и стартом)"
@@ -832,6 +904,10 @@ def cmd_down(_args: argparse.Namespace) -> int:
 def cmd_status(_args: argparse.Namespace) -> int:
     require_docker()
     require_env()
+    ownership_problems = check_ownership()
+    if ownership_problems:
+        raise CtlError(ownership_problems[0])
+
     result = compose("ps")
     if result.returncode != 0:
         raise CtlError("docker compose ps завершился с ошибкой")
@@ -841,6 +917,11 @@ def cmd_status(_args: argparse.Namespace) -> int:
     if port is None:
         warn("APP_PORT не задан, health-check пропущен")
         return 1
+    if not project_publishes_port(port):
+        raise CtlError(
+            f"Порт {port} не опубликован контейнером проекта '{PROJECT_NAME}'. "
+            "HTTP-ответ от другого процесса не считается статусом этого стека."
+        )
     try:
         with urllib.request.urlopen(  # noqa: S310
             f"http://127.0.0.1:{port}{HEALTH_PATH}", timeout=5

@@ -7,7 +7,9 @@ https://docs.djangoproject.com/en/6.0/topics/settings/
 
 import os
 import secrets
+import stat
 import sys
+import time
 from pathlib import Path
 
 from django.core.exceptions import ImproperlyConfigured
@@ -31,21 +33,79 @@ def _csv_env(name: str, default: str = "") -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
+def _read_dev_secret_key(key_file: Path) -> str | None:
+    flags = os.O_RDONLY
+    if os.name != "nt":
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(key_file, flags)
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise ImproperlyConfigured(
+            "Не удалось безопасно прочитать .dev-secret-key. "
+            "Используйте явный SECRET_KEY в .env."
+        ) from error
+
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ImproperlyConfigured(".dev-secret-key должен быть обычным файлом")
+        if os.name != "nt":
+            os.fchmod(descriptor, stat.S_IRUSR | stat.S_IWUSR)
+        return os.read(descriptor, 1024).decode("utf-8").strip()
+    except OSError as error:
+        raise ImproperlyConfigured(
+            "Не удалось безопасно прочитать .dev-secret-key. "
+            "Используйте явный SECRET_KEY в .env."
+        ) from error
+    finally:
+        os.close(descriptor)
+
+
+def _create_dev_secret_key(key_file: Path) -> str:
+    generated = secrets.token_urlsafe(64)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if os.name != "nt":
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(key_file, flags, stat.S_IRUSR | stat.S_IWUSR)
+    try:
+        if os.name != "nt":
+            os.fchmod(descriptor, stat.S_IRUSR | stat.S_IWUSR)
+        remaining = generated.encode("utf-8")
+        while remaining:
+            written = os.write(descriptor, remaining)
+            remaining = remaining[written:]
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    return generated
+
+
 def _dev_secret_key() -> str:
-    """Стабильный ключ для локальной разработки, свой на каждой машине.
+    """Стабильный DEBUG-ключ с правами владельца и безопасным созданием.
 
     Константа в репозитории позволяла бы подделывать подписанные Django
-    данные на любом стенде, где забыли .env, поэтому её здесь нет.
+    данные на любом стенде, где забыли .env, поэтому её здесь нет. на Unix
+    файл создается/исправляется с mode 0600, чтобы другой пользователь хоста
+    не смог читать ключ на demo-сервере
     """
     key_file = BASE_DIR / ".dev-secret-key"
-    if key_file.exists():
-        stored = key_file.read_text(encoding="utf-8").strip()
+    for _ in range(20):
+        stored = _read_dev_secret_key(key_file)
         if stored:
             return stored
-
-    generated = secrets.token_urlsafe(64)
-    key_file.write_text(generated, encoding="utf-8")
-    return generated
+        if stored is None:
+            try:
+                return _create_dev_secret_key(key_file)
+            except FileExistsError:
+                # Another worker won O_EXCL and is writing the same key.
+                pass
+        time.sleep(0.01)
+    raise ImproperlyConfigured(
+        ".dev-secret-key существует, но не содержит ключа. "
+        "Используйте явный SECRET_KEY в .env."
+    )
 
 
 # SECURITY WARNING: keep the secret key used in production secret.
@@ -59,6 +119,18 @@ if not SECRET_KEY:
         raise ImproperlyConfigured(
             "SECRET_KEY обязателен: задайте его в .env "
             "(python -c \"import secrets; print(secrets.token_urlsafe(64))\")"
+        )
+
+EMAIL_DELIVERY_QUOTA_SECRET = os.environ.get("EMAIL_DELIVERY_QUOTA_SECRET", "")
+if not EMAIL_DELIVERY_QUOTA_SECRET:
+    if TESTING:
+        EMAIL_DELIVERY_QUOTA_SECRET = "email-delivery-quota-secret-for-tests-only"
+    elif DEBUG:
+        EMAIL_DELIVERY_QUOTA_SECRET = SECRET_KEY
+    else:
+        raise ImproperlyConfigured(
+            "EMAIL_DELIVERY_QUOTA_SECRET обязателен при DEBUG=False: "
+            "задайте отдельный стабильный секрет в .env"
         )
 
 ALLOWED_HOSTS = _csv_env("ALLOWED_HOSTS", "localhost,127.0.0.1")
@@ -281,6 +353,11 @@ API_AUTH_THROTTLE = os.environ.get("API_AUTH_THROTTLE", "15/m")
 API_AUTH_THROTTLE_SUSTAINED = os.environ.get("API_AUTH_THROTTLE_SUSTAINED", "100/h")
 API_WRITE_THROTTLE = os.environ.get("API_WRITE_THROTTLE", "20/m")
 API_WRITE_THROTTLE_SUSTAINED = os.environ.get("API_WRITE_THROTTLE_SUSTAINED", "300/h")
+# Просмотр пишется отдельным POST, поэтому лимит не должен делить счетчик с оценками и комментариями.
+API_VIEW_THROTTLE = os.environ.get("API_VIEW_THROTTLE", "30/m")
+API_VIEW_THROTTLE_SUSTAINED = os.environ.get("API_VIEW_THROTTLE_SUSTAINED", "300/h")
+# Повторная отправка кода: строгий отдельный лимит на IP.
+API_RESEND_THROTTLE = os.environ.get("API_RESEND_THROTTLE", "5/h")
 
 # За nginx клиентский IP приходит в X-Forwarded-For; без этого троттлинг
 # видит всех клиентов как один адрес прокси
@@ -301,6 +378,9 @@ if TESTING:
     API_AUTH_THROTTLE_SUSTAINED = "10000/h"
     API_WRITE_THROTTLE = "10000/m"
     API_WRITE_THROTTLE_SUSTAINED = "10000/h"
+    API_VIEW_THROTTLE = "10000/m"
+    API_VIEW_THROTTLE_SUSTAINED = "10000/h"
+    API_RESEND_THROTTLE = "10000/h"
 
 
 # Password validation

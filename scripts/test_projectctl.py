@@ -32,6 +32,7 @@ def valid_env(**overrides: str) -> dict[str, str]:
     env = {
         "PROJECTCTL_MODE": "demo",
         "SECRET_KEY": ctl.generate_secret(),
+        "EMAIL_DELIVERY_QUOTA_SECRET": ctl.generate_secret(),
         "DB_PASSWORD": ctl.generate_secret(),
         "APP_PORT": "4173",
         "DEBUG": "False",
@@ -101,6 +102,17 @@ class InterpolationSafetyTest(unittest.TestCase):
             valid_env(EMAIL_HOST_PASSWORD="ab$cdef"), allow_debug=False
         )
         self.assertTrue(any("EMAIL_HOST_PASSWORD" in p for p in problems))
+
+    def test_quota_secret_is_required_and_interpolation_safe(self):
+        problems, _ = ctl.validate_env_values(
+            valid_env(EMAIL_DELIVERY_QUOTA_SECRET=""), allow_debug=False
+        )
+        self.assertTrue(any("EMAIL_DELIVERY_QUOTA_SECRET" in p for p in problems))
+
+        problems, _ = ctl.validate_env_values(
+            valid_env(EMAIL_DELIVERY_QUOTA_SECRET="a" * 55 + "$"), allow_debug=False
+        )
+        self.assertTrue(any("EMAIL_DELIVERY_QUOTA_SECRET" in p and "$" in p for p in problems))
 
     def test_db_password_quoted_is_error(self):
         problems, _ = ctl.validate_env_values(
@@ -359,6 +371,7 @@ class EnvFileTest(unittest.TestCase):
         )
         env = ctl.read_env(self.path)
         self.assertNotEqual(env["SECRET_KEY"], env["DB_PASSWORD"])
+        self.assertNotEqual(env["SECRET_KEY"], env["EMAIL_DELIVERY_QUOTA_SECRET"])
 
     def test_set_env_value_replaces_and_keeps_comments(self):
         ctl.write_env_atomic(self.path, "# комментарий\nSECRET_KEY=old\nAPP_PORT=4173\n")
@@ -372,6 +385,43 @@ class EnvFileTest(unittest.TestCase):
         ctl.write_env_atomic(self.path, "A=1\n")
         with self.assertRaises(ctl.CtlError):
             ctl.set_env_value(self.path, "A", "x\nB=2")
+
+    def test_init_preserves_legacy_quota_budget_before_secret_rotation(self):
+        old_secret = ctl.generate_secret()
+        ctl.write_env_atomic(self.path, f"SECRET_KEY={old_secret}\n")
+        args = argparse.Namespace(
+            mode="demo",
+            host=None,
+            port=4173,
+            rotate_secret=True,
+            allow_debug=False,
+            no_tls=False,
+        )
+
+        with mock.patch.object(ctl, "env_path", return_value=self.path):
+            self.assertEqual(ctl.cmd_init(args), 0)
+
+        env = ctl.read_env(self.path)
+        self.assertEqual(env["EMAIL_DELIVERY_QUOTA_SECRET"], old_secret)
+        self.assertNotEqual(env["SECRET_KEY"], old_secret)
+
+    def test_init_refuses_a_symlink_before_reading_it(self):
+        args = argparse.Namespace(
+            mode="demo",
+            host=None,
+            port=4173,
+            rotate_secret=False,
+            allow_debug=False,
+            no_tls=False,
+        )
+
+        with mock.patch.object(ctl, "env_path", return_value=self.path), \
+             mock.patch.object(Path, "is_symlink", return_value=True), \
+             mock.patch.object(ctl, "read_env") as read_env:
+            with self.assertRaises(ctl.CtlError):
+                ctl.cmd_init(args)
+
+        read_env.assert_not_called()
 
     def test_read_env_ignores_comments_and_blanks(self):
         ctl.write_env_atomic(self.path, "# c\n\nA=1\n  B=2\n")
@@ -479,14 +529,28 @@ class ExitCodeTest(unittest.TestCase):
 
     def test_status_fails_when_compose_fails(self):
         with mock.patch.object(ctl, "require_docker"), \
+             mock.patch.object(ctl, "check_ownership", return_value=[]), \
              mock.patch.object(ctl, "compose", return_value=completed(1)):
             self.assertEqual(ctl.main(["status"]), 1)
 
     def test_status_fails_when_health_unreachable(self):
         with mock.patch.object(ctl, "require_docker"), \
+             mock.patch.object(ctl, "check_ownership", return_value=[]), \
              mock.patch.object(ctl, "compose", return_value=completed(0)), \
+             mock.patch.object(ctl, "project_publishes_port", return_value=True), \
              mock.patch.object(ctl, "read_env", return_value={"APP_PORT": str(free_port())}):
             self.assertEqual(ctl.main(["status"]), 1)
+
+    def test_status_rejects_an_http_response_from_an_unpublished_port(self):
+        with mock.patch.object(ctl, "require_docker"), \
+             mock.patch.object(ctl, "check_ownership", return_value=[]), \
+             mock.patch.object(ctl, "compose", return_value=completed(0)), \
+             mock.patch.object(ctl, "project_publishes_port", return_value=False), \
+             mock.patch.object(ctl, "read_env", return_value={"APP_PORT": "4173"}), \
+             mock.patch.object(ctl.urllib.request, "urlopen") as urlopen:
+            self.assertEqual(ctl.main(["status"]), 1)
+
+        urlopen.assert_not_called()
 
     def test_logs_fails_when_compose_fails(self):
         with mock.patch.object(ctl, "require_docker"), \
@@ -795,33 +859,58 @@ class TempProjectMixin:
 
     @classmethod
     def setUpClass(cls):
+        super().setUpClass()
         cls.project = f"ctltest_{uuid.uuid4().hex[:10]}"
         cls.original_project = ctl.PROJECT_NAME
         cls.original_state = ctl.STATE_FILE
+        cls.base_files = ctl.compose_files
+        cls.base_env_path = ctl.env_path
+
+        cls.workdir = Path(tempfile.mkdtemp(prefix="projectctl-it-"))
+        cls.port = free_port()
+        cls.env_file = cls.workdir / "test.env"
+        cls.overlay = cls.workdir / "compose.override.yaml"
+
+        ctl.write_env_atomic(
+            cls.env_file,
+            ctl.render_env(mode="demo", host="", port=cls.port, debug=False, https=False),
+        )
+        cls.overlay.write_text(
+            "\n".join([
+                "services:",
+                "  backend:",
+                f"    env_file: !override [{cls.env_file.as_posix()}]",
+                "",
+            ]),
+            encoding="utf-8",
+        )
+
         ctl.PROJECT_NAME = cls.project
         ctl.STATE_FILE = f".projectctl-state-{cls.project}.json"
-
-        cls.created_env = not (ctl.ROOT / ctl.ENV_FILE).exists()
-        if cls.created_env:
-            ctl.write_env_atomic(
-                ctl.ROOT / ctl.ENV_FILE,
-                ctl.render_env(mode="demo", host="", port=ctl.DEFAULT_PORT,
-                               debug=False, https=False),
-            )
+        ctl.env_path = lambda: cls.env_file
+        ctl.compose_files = lambda mode: cls.base_files(mode) + ["-f", str(cls.overlay)]
 
     @classmethod
     def tearDownClass(cls):
-        subprocess.run(
-            ["docker", "compose", "-p", cls.project,
-             "-f", str(ctl.ROOT / ctl.COMPOSE_FILE),
-             "-f", str(ctl.ROOT / ctl.DEMO_OVERRIDE), "down", "-v"],
-            capture_output=True, cwd=str(ctl.ROOT), timeout=300,
-        )
-        (ctl.ROOT / ctl.STATE_FILE).unlink(missing_ok=True)
-        if cls.created_env:
-            (ctl.ROOT / ctl.ENV_FILE).unlink(missing_ok=True)
-        ctl.PROJECT_NAME = cls.original_project
-        ctl.STATE_FILE = cls.original_state
+        try:
+            subprocess.run(
+                [
+                    "docker", "compose", "-p", cls.project,
+                    "--env-file", str(cls.env_file),
+                    *cls.base_files("demo"),
+                    "-f", str(cls.overlay),
+                    "down", "-v",
+                ],
+                capture_output=True, cwd=str(ctl.ROOT), timeout=300,
+            )
+        finally:
+            (ctl.ROOT / ctl.STATE_FILE).unlink(missing_ok=True)
+            shutil.rmtree(cls.workdir, ignore_errors=True)
+            ctl.compose_files = cls.base_files
+            ctl.env_path = cls.base_env_path
+            ctl.PROJECT_NAME = cls.original_project
+            ctl.STATE_FILE = cls.original_state
+            super().tearDownClass()
 
 
 @unittest.skipUnless(docker_available(), "Docker недоступен")
@@ -869,69 +958,13 @@ class DockerIntegrationTest(TempProjectMixin, unittest.TestCase):
     docker_available() and os.environ.get("PROJECTCTL_INTEGRATION_UP") == "1",
     "Тяжёлый прогон: включается PROJECTCTL_INTEGRATION_UP=1",
 )
-class DockerUpDownIntegrationTest(unittest.TestCase):
+class DockerUpDownIntegrationTest(TempProjectMixin, unittest.TestCase):
     """
     блокер 5: обычный up -> health -> down без присвоения
 
     временное имя проекта, свободный порт и отдельный env-файл во временном
     каталоге: корневой .env проекта не читается ни инструментом, ни compose
     """
-
-    @classmethod
-    def setUpClass(cls):
-        cls.project = f"ctltest_{uuid.uuid4().hex[:10]}"
-        cls.original_project = ctl.PROJECT_NAME
-        cls.original_state = ctl.STATE_FILE
-        cls.base_files = ctl.compose_files
-        cls.base_env_path = ctl.env_path
-        cls.addClassCleanup(cls._restore)
-
-        cls.workdir = Path(tempfile.mkdtemp(prefix="projectctl-it-"))
-        cls.addClassCleanup(shutil.rmtree, cls.workdir, ignore_errors=True)
-        cls.addClassCleanup(cls._compose_down)
-
-        ctl.PROJECT_NAME = cls.project
-        ctl.STATE_FILE = f".projectctl-state-{cls.project}.json"
-        cls.addClassCleanup(
-            lambda: (ctl.ROOT / f".projectctl-state-{cls.project}.json").unlink(missing_ok=True)
-        )
-
-        cls.port = free_port()
-        cls.env_file = cls.workdir / "test.env"
-        cls.overlay = cls.workdir / "compose.override.yaml"
-
-        ctl.write_env_atomic(
-            cls.env_file,
-            ctl.render_env(mode="demo", host="", port=cls.port, debug=False, https=False),
-        )
-        overlay_lines = [
-            "services:",
-            "  backend:",
-            f"    env_file: !override [{cls.env_file.as_posix()}]",
-            "",
-        ]
-        cls.overlay.write_text(chr(10).join(overlay_lines), encoding="utf-8")
-
-        ctl.env_path = lambda: cls.env_file
-        ctl.compose_files = lambda mode: cls.base_files(mode) + ["-f", str(cls.overlay)]
-
-    @classmethod
-    def _compose_down(cls):
-        subprocess.run(
-            ["docker", "compose", "-p", cls.project,
-             "--env-file", str(cls.env_file),
-             "-f", str(ctl.ROOT / ctl.COMPOSE_FILE),
-             "-f", str(ctl.ROOT / ctl.DEMO_OVERRIDE),
-             "-f", str(cls.overlay), "down", "-v"],
-            capture_output=True, cwd=str(ctl.ROOT), timeout=300,
-        )
-
-    @classmethod
-    def _restore(cls):
-        ctl.compose_files = cls.base_files
-        ctl.env_path = cls.base_env_path
-        ctl.PROJECT_NAME = cls.original_project
-        ctl.STATE_FILE = cls.original_state
 
     def test_up_health_down_cycle(self):
         previous = os.environ.get("APP_PORT")
