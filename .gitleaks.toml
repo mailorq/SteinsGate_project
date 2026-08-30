@@ -26,3 +26,10 @@ commits = [
 ]
 paths = ['''(^|/)(backend/(accounts|users)/tests\.py|core/mainpage/tests\.py)$''']
 condition = "AND"
+
+[[allowlists]]
+description = "Один публичный пароль фикстуры verification-тестов"
+commits = ["4e858a5672f9a347bc0d8ac456211aa0ec938b9c"]
+paths = ['''^backend/accounts/(tests|tests_commands)\.py$''']
+regexes = ['''complex_pass_123''']
+condition = "AND"
