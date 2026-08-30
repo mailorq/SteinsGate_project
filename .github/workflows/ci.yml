@@ -29,6 +29,7 @@ jobs:
       - name: Django checks and tests
         env:
           SECRET_KEY: secret-key-used-only-by-ci
+          EMAIL_DELIVERY_QUOTA_SECRET: email-delivery-quota-secret-used-only-by-ci
           DEBUG: "False"
           HTTPS_ENABLED: "False"
         run: |
@@ -56,6 +57,7 @@ jobs:
           CSRF_TRUSTED_ORIGINS: https://steins.example.com
         run: |
           export SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(64))')"
+          export EMAIL_DELIVERY_QUOTA_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(64))')"
           python manage.py check --deploy --fail-level WARNING
 
   scripts:
