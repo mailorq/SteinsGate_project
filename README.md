@@ -4,6 +4,11 @@ A single-title streaming-style web application dedicated to Steins;Gate: watch b
 
 The project is a portfolio work demonstrating a production-shaped full-stack setup: a typed SPA frontend, a Django API backend with a service layer, and a containerized deployment behind nginx with Redis-backed rate limiting and caching.
 
+**Project status: complete.** The implemented scope is intentionally fixed to a
+small, polished Steins;Gate platform rather than an open-ended streaming service.
+Security checks, deployment safeguards, CI and a measured load-testing baseline
+are part of the finished project, not future work.
+
 ## Architecture
 
 ```
@@ -38,7 +43,7 @@ nginx (frontend container, :4173)
 | Backend    | Python 3.14, Django 6, django-ninja, gunicorn |
 | Storage    | PostgreSQL 16 (SQLite for local development), Redis 7 |
 | Infra      | Docker, docker compose, nginx |
-| Quality    | ruff, ESLint, GitHub Actions CI, Django test suite |
+| Quality    | ruff, ESLint, Django tests, projectctl integration tests, GitHub Actions CI, Gitleaks |
 
 ## API
 
@@ -107,6 +112,7 @@ Logs are split by purpose in `backend/logs/` (rotating files): `access.log` (HTT
 │   ├── catalog/         # titles, ratings, view history, aggregate cache
 │   ├── comments/        # comments, reactions, spam filter
 │   ├── watch/           # watch progress
+│   ├── loadtest/        # isolated Locust scenario, seed and SQL-query profiler
 │   └── Dockerfile       # python 3.14-slim, non-root, gunicorn
 ├── frontend/
 │   ├── src/
@@ -238,18 +244,46 @@ cd backend
 DEBUG=False SECRET_KEY=... EMAIL_DELIVERY_QUOTA_SECRET=... ALLOWED_HOSTS=example.com python manage.py check --deploy --fail-level WARNING
 ```
 
-CI runs five jobs on every push to `main`/`dev` and on every pull request: backend tests, the deployment checklist above, the frontend build, `nginx -t` against the real perimeter config, and a Gitleaks scan of the full history.
+CI runs six jobs on every push to `main`/`dev` and on every pull request:
+backend tests, the deployment checklist above, the frontend build, `nginx -t`
+against the real perimeter config, a Gitleaks scan of the full history, and the
+`projectctl` suite. The latter includes an isolated Docker
+`up → health → down` lifecycle check. It uses a temporary Compose project and
+does not touch a developer's existing containers or volumes.
 
-## Roadmap
+## Load testing
+
+The repository includes a repeatable, isolated Locust baseline rather than a
+claim based on unmeasured performance. Its stack uses a separate Compose project,
+temporary volumes and a loopback port, and refuses a non-local target unless
+explicitly authorised. The recorded development-machine baseline sustained about
+234 RPS at 500 concurrent users with p95 around 1.3 seconds and no meaningful
+error rate; 1,000 simulated users exceed the intended demo capacity.
+
+Run the complete local measurement with Docker Desktop:
+
+```
+backend/loadtest/run_loadtest.sh
+```
+
+See [backend/loadtest/README.md](backend/loadtest/README.md) for safeguards,
+hardware-dependent results, reports and cleanup.
+
+## Project roadmap
 
 - [x] SPA frontend with generated API types, session auth, comments, ratings, watch progress.
 - [x] django-ninja API over a service layer, domain app split.
 - [x] Redis: two-level throttling, IP lockout, aggregate caching, fail-open degradation.
 - [x] Structured logging, avatar cropping, responsive header, dev compose with HMR.
+- [x] Email-verification flow: hashed codes, controlled SMTP failures, resend with a shared recipient quota and stale-registration cleanup.
 - [x] Application security pass: client-IP trust model, CSRF on unauthenticated routes, upload validation, edge headers and CSP, secret scanning in CI.
 - [x] Production perimeter: loopback-only application port and documented TLS reverse-proxy trust boundary.
-- [ ] Catalog content served from the database instead of the frontend config.
-- [ ] Load testing and measured performance tuning (indexes, microcache).
+- [x] Verification: backend/frontend lint and tests, deployment checks, secret scanning, `projectctl` lifecycle integration and an isolated Locust baseline.
+
+The following are deliberate **non-goals**, not unfinished defects: a general
+CMS/database catalog for more titles, background mail queues, and scaling beyond
+the measured demo profile. They would change the product scope and should be
+designed as a separate iteration if the project grows.
 
 ## Author
 
