@@ -302,8 +302,8 @@ def validate_env_values(env: dict[str, str], *, allow_debug: bool) -> tuple[list
     debug = is_truthy(env.get("DEBUG", "False"))
     if debug and mode == "production":
         problems.append(
-            "DEBUG=True в режиме production: стек публикуется на всех интерфейсах. "
-            "Отладку запускайте в режиме demo (публикация только на 127.0.0.1)"
+            "DEBUG=True недопустим в режиме production: TLS-прокси делает сервис публичным. "
+            "Отладку запускайте только в режиме demo"
         )
     elif debug and not allow_debug:
         problems.append(
@@ -312,6 +312,12 @@ def validate_env_values(env: dict[str, str], *, allow_debug: bool) -> tuple[list
         )
     elif debug:
         warnings.append("DEBUG=True подтверждён явно, публикация ограничена 127.0.0.1")
+
+    https_enabled = is_truthy(env.get("HTTPS_ENABLED", ""))
+    if mode == "production" and not https_enabled:
+        problems.append(
+            "HTTPS_ENABLED=True обязателен в production. Для HTTP-отладки используйте режим demo"
+        )
 
     if not env.get("ALLOWED_HOSTS"):
         problems.append("ALLOWED_HOSTS пуст")
@@ -332,10 +338,10 @@ def validate_env_values(env: dict[str, str], *, allow_debug: bool) -> tuple[list
             if validate_host(candidate)[1]:
                 problems.append(f"ALLOWED_HOSTS содержит некорректное значение: {candidate!r}")
 
-    if is_truthy(env.get("HTTPS_ENABLED", "")):
+    if https_enabled:
         warnings.append(
-            "HTTPS_ENABLED=True: скрипт не проверяет TLS-терминатор и сертификат. "
-            "Без него Secure-cookie не дойдут и вход не сработает"
+            "HTTPS_ENABLED=True: TLS-терминатор и сертификат не проверяются скриптом. "
+            "Прокси хоста должен сам перезаписывать X-Forwarded-Proto"
         )
     if not env.get("EMAIL_HOST_USER") or not env.get("EMAIL_HOST_PASSWORD"):
         warnings.append(
@@ -343,7 +349,10 @@ def validate_env_values(env: dict[str, str], *, allow_debug: bool) -> tuple[list
             "регистрация вернёт 202 и потребуется повторная отправка"
         )
     if mode == "production":
-        warnings.append("Режим production: фронтенд публикуется на всех интерфейсах")
+        warnings.append(
+            "Режим production: фронтенд доступен только на 127.0.0.1; "
+            "публичный доступ предоставляет TLS-прокси хоста"
+        )
 
     if port is not None and port < 1024 and os.name != "nt":
         warnings.append(f"APP_PORT={port} требует привилегий root")
@@ -354,44 +363,31 @@ def validate_env_values(env: dict[str, str], *, allow_debug: bool) -> tuple[list
 # порт
 
 
-def port_is_free(port: int, *, mode: str = "production") -> bool:
+def port_is_free(port: int) -> bool:
     """Preflight the exact host bindings Compose will request.
 
-    A loopback connection cannot see a process bound only to another interface,
-    so production probes wildcard binds instead. This remains advisory: another
-    process can claim the port between this check and ``docker compose up``.
+    every supported mode binds only IPv4 loopback so application traffic cannot
+    bypass the host TLS proxy. the check remains advisory: another process can
+    claim the port between this check and ``docker compose up``.
     """
-    bindings = [("127.0.0.1", socket.AF_INET)] if mode == "demo" else [
-        ("0.0.0.0", socket.AF_INET),
-    ]
-    if mode != "demo" and socket.has_ipv6:
-        bindings.append(("::", socket.AF_INET6))
-
-    for host, family in bindings:
-        try:
-            with socket.socket(family, socket.SOCK_STREAM) as probe:
-                if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
-                    probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-                if family == socket.AF_INET6:
-                    probe.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
-                probe.bind((host, port))
-        except OSError:
-            return False
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            probe.bind(("127.0.0.1", port))
+    except OSError:
+        return False
 
     # Windows can permit a wildcard bind alongside a listener that opted into
     # SO_REUSEADDR. Probe the loopbacks too, so an occupied local address is
     # never reported as free.
-    reachable = [("127.0.0.1", socket.AF_INET)]
-    if mode != "demo" and socket.has_ipv6:
-        reachable.append(("::1", socket.AF_INET6))
-    for host, family in reachable:
-        try:
-            with socket.socket(family, socket.SOCK_STREAM) as probe:
-                probe.settimeout(0.5)
-                if probe.connect_ex((host, port)) == 0:
-                    return False
-        except OSError:
-            continue
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.settimeout(0.5)
+            if probe.connect_ex(("127.0.0.1", port)) == 0:
+                return False
+    except OSError:
+        pass
     return True
 
 
@@ -501,12 +497,13 @@ def check_service_exposure(mode: str) -> list[str]:
         ports = service.get("ports") or []
         if ports and name not in PUBLISHING_SERVICES:
             problems.append(f"Сервис '{name}' публикует порт наружу — так быть не должно")
-        if name in PUBLISHING_SERVICES and mode == "demo":
+        if name in PUBLISHING_SERVICES:
             for entry in ports:
                 published = entry.get("host_ip") if isinstance(entry, dict) else None
-                if published not in ("127.0.0.1", "::1"):
+                if published != "127.0.0.1":
                     problems.append(
-                        f"Режим demo: '{name}' публикуется на {published or 'всех интерфейсах'}"
+                        f"'{name}' должен публиковаться только на 127.0.0.1, "
+                        f"а не на {published or 'всех интерфейсах'}"
                     )
     return problems
 
@@ -745,7 +742,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     if port_problems:
         raise CtlError("; ".join(port_problems))
 
-    https = args.mode == "production" and not args.no_tls
+    https = args.mode == "production"
     write_env_atomic(
         path,
         render_env(mode=args.mode, host=host, port=port, debug=args.allow_debug, https=https),
@@ -761,8 +758,6 @@ def cmd_init(args: argparse.Namespace) -> int:
         ok("Режим demo: фронтенд публикуется только на 127.0.0.1")
     if args.allow_debug:
         warn("DEBUG=True разрешён только в demo: публикация остаётся на loopback")
-    if args.mode == "production" and args.no_tls:
-        warn("HTTPS_ENABLED=False: перед публикацией поставьте TLS-терминатор")
     info(
         "Заполните EMAIL_HOST_USER/EMAIL_HOST_PASSWORD, иначе письмо не подтвердится "
         "и регистрация вернёт 202"
@@ -776,9 +771,11 @@ def render_env(*, mode: str, host: str, port: int, debug: bool, https: bool) -> 
     if mode == "production":
         allowed_hosts = host
         origins = f"{scheme}://{host}"
+        trusted_proxy_hops = 2
     else:
         allowed_hosts = "localhost,127.0.0.1"
         origins = f"http://localhost:{port},http://127.0.0.1:{port}"
+        trusted_proxy_hops = 1
 
     return f"""# Создан scripts/projectctl.py. Не коммитить.
 # SECRET_KEY меняйте только через --rotate-secret; quota-secret оставляйте стабильным.
@@ -792,6 +789,8 @@ HTTPS_ENABLED={https}
 ALLOWED_HOSTS={allowed_hosts}
 CSRF_TRUSTED_ORIGINS={origins}
 APP_PORT={port}
+# production: TLS-прокси хоста + nginx контейнера; demo: nginx контейнера
+NINJA_NUM_PROXIES={trusted_proxy_hops}
 
 DB_NAME=steinsgate
 DB_USER=steinsgate
@@ -822,12 +821,12 @@ def cmd_validate(args: argparse.Namespace) -> int:
     problems.extend(check_ownership())
 
     port, _ = validate_port(env.get("APP_PORT", ""))
-    if port is not None and not port_is_free(port, mode=mode):
+    if port is not None and not port_is_free(port):
         if project_publishes_port(port):
             warnings.append(f"Порт {port} занят контейнером этого же проекта (стек уже запущен)")
         else:
             problems.append(
-                f"Порт {port} занят другим процессом (проверены IPv4, IPv6 и wildcard). "
+                f"Порт {port} занят на 127.0.0.1. "
                 f"Освободите его или задайте другой APP_PORT в {ENV_FILE}"
             )
 
@@ -866,7 +865,7 @@ def cmd_up(args: argparse.Namespace) -> int:
     info(f"Запускаю стек '{PROJECT_NAME}' (режим: {mode})")
     result = compose("up", "-d", *build_args, mode=mode, timeout=BUILD_TIMEOUT)
     if result.returncode != 0:
-        if not port_is_free(port, mode=mode) and not project_publishes_port(port):
+        if not port_is_free(port) and not project_publishes_port(port):
             raise CtlError(
                 f"Не удалось запустить: порт {port} занят другим процессом "
                 "(освободился между проверкой и стартом)"
@@ -882,8 +881,7 @@ def cmd_up(args: argparse.Namespace) -> int:
         )
 
     wait_for_health(port, args.timeout)
-    host_label = "127.0.0.1" if mode == "demo" else "0.0.0.0"
-    ok(f"Готово: http://localhost:{port} (публикация: {host_label})")
+    ok(f"Готово: http://localhost:{port} (публикация: 127.0.0.1)")
     return 0
 
 
@@ -1038,7 +1036,6 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--port", type=int, default=DEFAULT_PORT)
     init.add_argument("--rotate-secret", action="store_true", help="заменить SECRET_KEY")
     init.add_argument("--allow-debug", action="store_true", help="записать DEBUG=True")
-    init.add_argument("--no-tls", action="store_true", help="production без TLS-терминатора")
     init.set_defaults(func=cmd_init)
 
     validate = subparsers.add_parser("validate", help="проверить окружение и конфигурацию")

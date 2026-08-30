@@ -187,7 +187,7 @@ class HostValidationTest(unittest.TestCase):
             path = Path(tmp) / ".env"
             args = argparse.Namespace(
                 mode="production", host="example.com\nDEBUG=True", port=4173,
-                rotate_secret=False, allow_debug=False, no_tls=True,
+                rotate_secret=False, allow_debug=False,
             )
             with mock.patch.object(ctl, "env_path", return_value=path):
                 with self.assertRaises(ctl.CtlError):
@@ -248,14 +248,6 @@ class PortConflictTest(unittest.TestCase):
         port = self._serve(socket.AF_INET, ("0.0.0.0", 0))
         self.assertFalse(ctl.port_is_free(port))
 
-    def test_ipv6_loopback_conflict(self):
-        try:
-            port = self._serve(socket.AF_INET6, ("::1", 0))
-        except OSError:
-            self.skipTest("IPv6 недоступен")
-        self.assertFalse(ctl.port_is_free(port))
-
-
 class EnvValidationTest(unittest.TestCase):
 
     def test_valid_env_has_no_problems(self):
@@ -275,6 +267,11 @@ class EnvValidationTest(unittest.TestCase):
         env = valid_env(DEBUG="True", PROJECTCTL_MODE="production")
         problems, _ = ctl.validate_env_values(env, allow_debug=True)
         self.assertTrue(any("production" in p for p in problems))
+
+    def test_https_is_required_in_production(self):
+        env = valid_env(HTTPS_ENABLED="False", PROJECTCTL_MODE="production")
+        problems, _ = ctl.validate_env_values(env, allow_debug=False)
+        self.assertTrue(any("HTTPS_ENABLED=True" in p for p in problems))
 
     def test_debug_without_mode_marker_falls_back_to_demo(self):
         env = valid_env(DEBUG="True")
@@ -364,6 +361,21 @@ class EnvFileTest(unittest.TestCase):
         env = ctl.read_env(self.path)
         self.assertEqual(env["ALLOWED_HOSTS"], "steins.example.com")
         self.assertEqual(env["CSRF_TRUSTED_ORIGINS"], "https://steins.example.com")
+        self.assertEqual(env["NINJA_NUM_PROXIES"], "2")
+
+    def test_init_production_always_enables_https(self):
+        args = argparse.Namespace(
+            mode="production",
+            host="steins.example.com",
+            port=4173,
+            rotate_secret=False,
+            allow_debug=False,
+        )
+
+        with mock.patch.object(ctl, "env_path", return_value=self.path):
+            self.assertEqual(ctl.cmd_init(args), 0)
+
+        self.assertEqual(ctl.read_env(self.path)["HTTPS_ENABLED"], "True")
 
     def test_render_env_generates_distinct_secrets(self):
         ctl.write_env_atomic(
@@ -395,7 +407,6 @@ class EnvFileTest(unittest.TestCase):
             port=4173,
             rotate_secret=True,
             allow_debug=False,
-            no_tls=False,
         )
 
         with mock.patch.object(ctl, "env_path", return_value=self.path):
@@ -412,7 +423,6 @@ class EnvFileTest(unittest.TestCase):
             port=4173,
             rotate_secret=False,
             allow_debug=False,
-            no_tls=False,
         )
 
         with mock.patch.object(ctl, "env_path", return_value=self.path), \
@@ -512,13 +522,13 @@ class JsonStrictnessTest(unittest.TestCase):
             problems = ctl.check_service_exposure("demo")
         self.assertTrue(any("backend" in p for p in problems))
 
-    def test_demo_flags_public_frontend_binding(self):
+    def test_any_mode_flags_public_frontend_binding(self):
         config = json.dumps({"services": {
             "frontend": {"ports": [{"host_ip": "0.0.0.0", "published": "4173"}]},
         }})
         with mock.patch.object(ctl, "compose", return_value=completed(0, config)):
-            problems = ctl.check_service_exposure("demo")
-        self.assertTrue(any("demo" in p for p in problems))
+            problems = ctl.check_service_exposure("production")
+        self.assertTrue(any("127.0.0.1" in p for p in problems))
 
     def test_iter_json_objects_raises_on_bad_line(self):
         with self.assertRaises(ctl.CtlError):
@@ -933,11 +943,11 @@ class DockerIntegrationTest(TempProjectMixin, unittest.TestCase):
         for entry in config["services"]["frontend"]["ports"]:
             self.assertEqual(entry.get("host_ip"), "127.0.0.1")
 
-    def test_production_binds_all_interfaces(self):
+    def test_production_binds_loopback_only(self):
         result = ctl.compose("config", "--format", "json", mode="production", capture=True)
         config = ctl.parse_json_strict(result.stdout, "config")
-        host_ips = {e.get("host_ip") for e in config["services"]["frontend"]["ports"]}
-        self.assertNotEqual(host_ips, {"127.0.0.1"})
+        for entry in config["services"]["frontend"]["ports"]:
+            self.assertEqual(entry.get("host_ip"), "127.0.0.1")
 
     def test_fresh_project_has_no_entities(self):
         self.assertEqual(ctl.project_containers(), [])

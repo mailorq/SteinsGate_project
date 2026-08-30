@@ -1,5 +1,6 @@
 import logging
 import os
+import warnings
 from dataclasses import dataclass
 
 from django.conf import settings
@@ -25,7 +26,9 @@ ALLOWED_EMAIL_DOMAINS = (
 )
 MAX_NICKNAME_LENGTH = 50
 ALLOWED_AVATAR_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp'}
+ALLOWED_AVATAR_FORMATS = ("JPEG", "PNG", "GIF", "WEBP")
 MAX_AVATAR_SIZE = 8 * 1024 * 1024
+MAX_AVATAR_PIXELS = 16_000_000
 
 
 class RegistrationError(Exception):
@@ -367,10 +370,20 @@ def update_avatar(*, user: User, avatar) -> None:
     if extension not in ALLOWED_AVATAR_EXTENSIONS:
         raise ProfileError("Допустимые форматы: JPG, PNG, GIF, WEBP")
 
-    # расширение подделывается тривиально, содержимое проверяет декодер
-    # save(update_fields=...) не вызывает full_clean, валидаторы ImageField молчат
+    # ``formats`` не даёт Pillow даже разбирать неподдерживаемые форматы: одно
+    # расширение можно подделать. лимит пикселей защищает worker от сжатых
+    # изображений с чрезмерными размерами
     try:
-        Image.open(avatar).verify()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(avatar, formats=ALLOWED_AVATAR_FORMATS) as image:
+                if image.width * image.height > MAX_AVATAR_PIXELS:
+                    raise ProfileError("Изображение слишком большое по разрешению")
+                image.verify()
+    except ProfileError:
+        raise
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning):
+        raise ProfileError("Изображение слишком большое по разрешению") from None
     except Exception:
         raise ProfileError("Файл не является изображением") from None
     finally:

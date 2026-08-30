@@ -1,9 +1,16 @@
+x-default-logging: &default-logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    logging: *default-logging
     environment:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
@@ -25,6 +32,7 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    logging: *default-logging
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -40,13 +48,14 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    logging: *default-logging
     env_file: .env
     environment:
       DB_ENGINE: django.db.backends.postgresql
       DB_HOST: db
       DB_PORT: 5432
       REDIS_URL: redis://redis:6379/0
-    command: sh -c "python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --worker-class gthread --workers $${GUNICORN_WORKERS:-3} --threads $${GUNICORN_THREADS:-4} --max-requests $${GUNICORN_MAX_REQUESTS:-2000} --max-requests-jitter 200 --access-logfile /app/logs/access.log --error-logfile /app/logs/worker.log"
+    command: sh -c "python manage.py migrate --noinput && python manage.py collectstatic --noinput && exec gunicorn config.wsgi:application --bind 0.0.0.0:8000 --worker-class gthread --workers $${GUNICORN_WORKERS:-3} --threads $${GUNICORN_THREADS:-4} --max-requests $${GUNICORN_MAX_REQUESTS:-2000} --max-requests-jitter 200 --access-logfile - --error-logfile -"
     volumes:
       - django_static:/app/staticfiles
       - django_media:/app/media
@@ -67,8 +76,9 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    logging: *default-logging
     ports:
-      - "${APP_PORT:-4173}:4173"
+      - "127.0.0.1:${APP_PORT:-4173}:4173"
     volumes:
       - django_static:/srv/django-static:ro
       - django_media:/srv/django-media:ro

@@ -852,6 +852,14 @@ class AvatarValidationTest(TestCase):
         self.user.profile.refresh_from_db()
         self.assertTrue(self.user.profile.avatar)
 
+    def test_excessive_resolution_rejected(self):
+        buffer = io.BytesIO()
+        Image.new('1', (4_001, 4_001)).save(buffer, format='PNG')
+        avatar = SimpleUploadedFile('avatar.png', buffer.getvalue(), content_type='image/png')
+
+        with self.assertRaises(services.ProfileError):
+            services.update_avatar(user=self.user, avatar=avatar)
+
     def test_previous_file_removed_on_replace(self):
         services.update_avatar(user=self.user, avatar=self._png('red'))
         profile = self.user.profile
